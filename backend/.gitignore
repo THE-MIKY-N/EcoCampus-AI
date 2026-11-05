@@ -1,0 +1,27 @@
+
+# Entorno virtual y archivos de Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Configuración privada
+.env
+.env.*
+
+# Archivos generados por Django
+staticfiles/
+media/
+
+# Configuración local del editor
+.idea/
+.vscode/
+
+# Bases de datos y respaldos
+*.bak
+*.mdf
+*.ldf
+*.sqlite3
+
+# Logs
+*.log

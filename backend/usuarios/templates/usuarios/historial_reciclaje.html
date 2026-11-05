@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mi historial de reciclaje | EcoCampus AI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f7f4;
+            color: #222;
+            margin: 0;
+            padding: 24px;
+        }
+
+        main {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #18794e;
+        }
+
+        .tarjeta {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin: 20px 0;
+            box-shadow: 0 2px 8px #00000012;
+        }
+
+        .tabla-contenedor {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #e5f4e9;
+        }
+
+        .puntos {
+            color: #18794e;
+            font-weight: bold;
+        }
+
+        a {
+            color: #18794e;
+        }
+
+        .vacio {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+<main>
+    <h1>Mi historial de reciclaje</h1>
+
+    <p>Consulta tus actividades de reciclaje registradas en EcoCampus AI.</p>
+
+    <section class="tarjeta">
+        <h2>Mis registros</h2>
+
+        {% if registros %}
+            <div class="tabla-contenedor">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Residuo</th>
+                            <th>Punto de reciclaje</th>
+                            <th>Cantidad</th>
+                            <th>Puntos obtenidos</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for registro in registros %}
+                            <tr>
+                                <td>{{ registro.fecha_registro|date:"d/m/Y H:i" }}</td>
+                                <td>{{ registro.tipo_residuo.nombre }}</td>
+                                <td>{{ registro.punto_reciclaje.nombre }}</td>
+                                <td>{{ registro.cantidad }}</td>
+                                <td class="puntos">+{{ registro.puntos_otorgados }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="vacio">Todavía no tienes registros de reciclaje.</p>
+        {% endif %}
+    </section>
+
+    <p><a href="{% url 'inicio' %}">Volver al inicio</a></p>
+</main>
+</body>
+</html>

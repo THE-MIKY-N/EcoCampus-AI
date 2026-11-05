@@ -1,0 +1,31 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>EcoCampus AI</title>
+</head>
+<body>
+    <h1>Bienvenido a EcoCampus AI</h1>
+
+    <p>Has iniciado sesión correctamente.</p>
+    <p>Usuario: {{ request.user.username }}</p>
+
+    {% if request.user.perfil %}
+        <p>Carrera: {{ request.user.perfil.carrera_relacionada.nombre|default:"Sin carrera" }}</p>
+        <p>Facultad: {{ request.user.perfil.facultad_relacionada.nombre|default:"Sin facultad" }}</p>
+        <p>Puntos: {{ request.user.perfil.puntos }}</p>
+
+        <p>
+            <a href="{% url 'historial_reciclaje' %}">
+                Ver mi historial de reciclaje
+            </a>
+        </p>
+    {% endif %}
+
+    <form method="post" action="{% url 'logout' %}">
+        {% csrf_token %}
+        <button type="submit">Cerrar sesión</button>
+    </form>
+</body>
+</html>

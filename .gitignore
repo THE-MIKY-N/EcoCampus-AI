@@ -1,0 +1,30 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+
+# Variables privadas
+.env
+.env.*
+!.env.example
+
+# Node y React
+node_modules/
+dist/
+dist-ssr/
+
+# Archivos temporales
+*.log
+*.local
+
+# PyCharm y editores
+.idea/
+.vscode/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+# Respaldos de bases de datos
+*.bak
