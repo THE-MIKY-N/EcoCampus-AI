@@ -3123,3 +3123,18 @@ class MisRecompensasAPIView(APIView):
             "id": canje.id,
             "estado": canje.estado
         }, status=status.HTTP_200_OK)
+
+
+
+class NivelesReciclajeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        niveles = NivelReciclaje.objects.filter(activo=True)
+
+        serializer = NivelReciclajeSerializer(
+            niveles,
+            many=True
+        )
+
+        return Response(serializer.data)

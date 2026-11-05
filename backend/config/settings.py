@@ -28,20 +28,38 @@ if not SECRET_KEY:
     raise RuntimeError("Falta configurar DJANGO_SECRET_KEY")
 
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Configuración de seguridad según el entorno
+DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() == "true"
 
-
-
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get(
+        "DJANGO_ALLOWED_HOSTS",
+        "localhost,127.0.0.1"
+    ).split(",")
+    if host.strip()
 ]
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "DJANGO_CSRF_TRUSTED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
+]
+
+
 
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
+
+# Seguridad adicional en producción
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 # Application definition
 
@@ -60,12 +78,14 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -88,21 +108,47 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "mssql",
-        "NAME": "EcoCampusAI",
-        "HOST": r"DESKTOP-LQ7RG1G",
-        "PORT": "",
-        "OPTIONS": {
-            "driver": "ODBC Driver 18 for SQL Server",
-            "extra_params": "TrustServerCertificate=yes;",
-        },
-    },
-}
+# Database
+from urllib.parse import unquote, urlparse
+
+# Selección de base de datos:
+# Por defecto utiliza SQL Server local.
+# Para utilizar Supabase, configurar DJANGO_USE_SUPABASE=true.
+
+if os.environ.get("DJANGO_USE_SUPABASE", "").lower() == "true":
+
+    db_url = urlparse(os.environ["SUPABASE_DATABASE_URL"])
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": db_url.path.lstrip("/"),
+            "USER": unquote(db_url.username or ""),
+            "PASSWORD": unquote(db_url.password or ""),
+            "HOST": db_url.hostname,
+            "PORT": str(db_url.port or 5432),
+            "OPTIONS": {
+                "sslmode": "require",
+            },
+        }
+    }
+
+else:
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "mssql",
+            "NAME": "EcoCampusAI",
+            "HOST": r"DESKTOP-LQ7RG1G",
+            "PORT": "",
+            "OPTIONS": {
+                "driver": "ODBC Driver 18 for SQL Server",
+                "extra_params": "TrustServerCertificate=yes;",
+            },
+        }
+    }
+
 
 
 # Password validation
@@ -139,7 +185,22 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
+
+# Archivos multimedia (imágenes subidas por los usuarios)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 
 # Email

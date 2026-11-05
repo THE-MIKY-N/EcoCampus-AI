@@ -35,6 +35,7 @@ from .api_views import (
     RecompensasDisponiblesAPIView,
     CanjearRecompensaAPIView,
     MisRecompensasAPIView,
+    NivelesReciclajeAPIView,
 
 )
 
@@ -173,5 +174,10 @@ urlpatterns = [
         "mis-recompensas/<int:pk>/",
         MisRecompensasAPIView.as_view(),
         name="actualizar-mis-recompensas"
+    ),
+    path(
+        "niveles/",
+        NivelesReciclajeAPIView.as_view(),
+        name="niveles-reciclaje",
     ),
 ]

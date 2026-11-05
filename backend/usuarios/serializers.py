@@ -1,3 +1,4 @@
+import os
 from rest_framework import serializers
 from django.db.models import Sum
 from .models import (
@@ -170,6 +171,8 @@ class RankingEstudianteSerializer(serializers.ModelSerializer):
 
 
 class NivelReciclajeSerializer(serializers.ModelSerializer):
+    imagen = serializers.SerializerMethodField()
+
     class Meta:
         model = NivelReciclaje
         fields = [
@@ -178,6 +181,20 @@ class NivelReciclajeSerializer(serializers.ModelSerializer):
             "puntos_minimos",
             "imagen",
         ]
+
+    def get_imagen(self, obj):
+        if not obj.imagen:
+            return None
+
+        storage_url = os.environ.get("SUPABASE_STORAGE_URL")
+
+        if storage_url:
+            return (
+                f"{storage_url.rstrip('/')}"
+                f"/niveles/{obj.imagen.name}"
+            )
+
+        return obj.imagen.url
 
 
 class InsigniaSerializer(serializers.ModelSerializer):

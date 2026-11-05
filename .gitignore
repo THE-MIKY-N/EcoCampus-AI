@@ -28,3 +28,8 @@ dist-ssr/
 Thumbs.db
 # Respaldos de bases de datos
 *.bak
+# Respaldos de migración de EcoCampus AI
+backend/EcoCampus_respaldo*.json
+
+# Archivos estáticos generados por Django
+backend/staticfiles/
