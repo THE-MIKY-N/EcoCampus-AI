@@ -1,0 +1,4 @@
+/api/* https://ecocampus-ai-tgjc.onrender.com/api/:splat 200
+/admin/* https://ecocampus-ai-tgjc.onrender.com/admin/:splat 200
+/static/* https://ecocampus-ai-tgjc.onrender.com/static/:splat 200
+/* /index.html 200

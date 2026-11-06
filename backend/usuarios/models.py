@@ -2,6 +2,7 @@ import uuid
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from usuarios.storage import SupabaseMediaStorage
 
 class Facultad(models.Model):
     nombre = models.CharField(max_length=150, unique=True)
@@ -233,6 +234,7 @@ class Insignia(models.Model):
     puntos_requeridos = models.PositiveIntegerField(default=0)
     imagen = models.ImageField(
         upload_to="insignias/",
+        storage=SupabaseMediaStorage(),
         blank=True,
         null=True
     )
@@ -542,6 +544,7 @@ class Recompensa(models.Model):
     cantidad_disponible = models.PositiveIntegerField(default=0)
     imagen = models.ImageField(
         upload_to="recompensas/",
+        storage=SupabaseMediaStorage(),
         blank=True,
         null=True
     )

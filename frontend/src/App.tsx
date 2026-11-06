@@ -2442,10 +2442,10 @@ function BadgesPage({ equipped }: { equipped: string[] }) {
                   key={badge.id}
                 >
                   <div className="badge-art">
-  {badge.imagen ? (
+  {badge.imageUrl ? (
     <img
-      src={`http://localhost:8000${badge.imagen}`}
-      alt={badge.nombre}
+      src={badge.imageUrl}
+      alt={badge.name}
       style={{
         width: "100%",
         height: "100%",
@@ -4066,14 +4066,22 @@ function AdminForm({
   wasteTypes?: { id: number; nombre: string }[];
   isChallenge?: boolean;
   allowImage?: boolean;
-  onSave: (v: AdminEntity) => void;
+  onSave: (v: AdminEntity, image?: File) => void;
   onClose: () => void;
 }) {
 
  const [draft,setDraft]=useState<AdminEntity>(item||{id:"",name:"",description:"",active:true,faculty:faculties?.[0]?.name||""});
- const [imageSelected,setImageSelected]=useState(false);
+ const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const esFormularioReto = isChallenge;
- return <div className="modal-backdrop" onClick={onClose}><form className="modal admin-modal entity-form" onSubmit={e=>{e.preventDefault();if(draft.name.trim())onSave({...draft,id:draft.id||`item-nuevo-${draft.name.trim().toLowerCase().replace(/\s+/g,"-")}`})}} onClick={e=>e.stopPropagation()}><button type="button" className="modal-close" onClick={onClose}><Icon name="close"/></button><h2>{title}</h2><div className="entity-form-fields"><label>Nombre<input required value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/></label><label>Descripción<input required value={draft.description} onChange={e=>setDraft({...draft,description:e.target.value})}/></label>{faculties && !isChallenge && (
+ return <div className="modal-backdrop" onClick={onClose}><form className="modal admin-modal entity-form" onSubmit={e=>{e.preventDefault();if (draft.name.trim()) {
+  onSave(
+    {
+      ...draft,
+      id: draft.id || `item-nuevo-${draft.name.trim().toLowerCase().replace(/\s+/g, "-")}`,
+    },
+    selectedImage || undefined
+  );
+}}} onClick={e=>e.stopPropagation()}><button type="button" className="modal-close" onClick={onClose}><Icon name="close"/></button><h2>{title}</h2><div className="entity-form-fields"><label>Nombre<input required value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/></label><label>Descripción<input required value={draft.description} onChange={e=>setDraft({...draft,description:e.target.value})}/></label>{faculties && !isChallenge && (
   <label>
     Facultad
     <select
@@ -4248,7 +4256,24 @@ function AdminForm({
     />
   </label>
 </div>
- </>}{item?.condition!==undefined&&<label className="form-wide">Condición para obtenerla<input value={draft.condition||""} onChange={e=>setDraft({...draft,condition:e.target.value})}/></label>}{allowImage&&<div className="entity-image-field"><span className="block text-xs font-bold mb-2">Imagen</span><Button variant="secondary" icon="download" className="image-drop" onClick={()=>setImageSelected(!imageSelected)}>{imageSelected?"Imagen de ejemplo seleccionada":"Seleccionar imagen de ejemplo"}</Button></div>}</div><div className="flow-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button type="submit">Guardar</Button></div></form></div>
+ </>}{item?.condition!==undefined&&<label className="form-wide">Condición para obtenerla<input value={draft.condition||""} onChange={e=>setDraft({...draft,condition:e.target.value})}/></label>}{allowImage && (
+  <div className="entity-image-field">
+    <label>
+      Imagen
+      <input
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        onChange={(e) =>
+          setSelectedImage(e.target.files?.[0] || null)
+        }
+      />
+    </label>
+
+    {selectedImage && (
+      <p>Imagen seleccionada: {selectedImage.name}</p>
+    )}
+  </div>
+)}</div><div className="flow-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button type="submit">Guardar</Button></div></form></div>
 }
 
 
@@ -4308,16 +4333,17 @@ function AdminEntities({
 
       const registros: AdminEntity[] = data.map((item: any) => {
         if (kind === "rewards") {
-          return {
-            id: String(item.id),
-            name: item.nombre,
-            description: item.descripcion || "",
-            active: item.activa,
-            cost: item.costo_ecucoins,
-            stock: item.cantidad_disponible,
-            redeemed: item.canjes_realizados,
-          };
-        }
+  return {
+    id: String(item.id),
+    name: item.nombre,
+    description: item.descripcion || "",
+    active: item.activa,
+    cost: item.costo_ecucoins,
+    stock: item.cantidad_disponible,
+    redeemed: item.canjes_realizados,
+    imageUrl: item.imagen || "",
+  };
+}
 
 
       if (kind === "challenges") {
@@ -4363,13 +4389,14 @@ function AdminEntities({
 
 
         return {
-          id: String(item.id),
-          name: item.nombre,
-          description: item.descripcion || "",
-          active: item.activo,
-          condition: `Alcanzar ${item.puntos_requeridos} puntos`,
-          obtained: item.obtenidas,
-        };
+  id: String(item.id),
+  name: item.nombre,
+  description: item.descripcion || "",
+  active: item.activo,
+  condition: `Alcanzar ${item.puntos_requeridos} puntos`,
+  obtained: item.obtenidas,
+  imageUrl: item.imagen || "",
+};
       });
 
       setStore((previous) => ({
@@ -4445,7 +4472,7 @@ function AdminEntities({
             ? "award"
             : "file";
 
-  const save = async (item: AdminEntity) => {
+  const save = async (item: AdminEntity, image?: File) => {
     if (kind === "faculties") {
       try {
         const previous = source.find((x) => x.id === item.id);
@@ -4717,6 +4744,8 @@ function AdminEntities({
     }
 
 
+
+
 // Guardado de Recompensas en Django
 if (kind === "rewards") {
   try {
@@ -4727,25 +4756,30 @@ if (kind === "rewards") {
       .find((cookie) => cookie.startsWith("csrftoken="))
       ?.split("=")[1];
 
+    const formData = new FormData();
+
+    formData.append("nombre", item.name);
+    formData.append("descripcion", item.description || "");
+    formData.append("costo_ecucoins", String(item.cost ?? 0));
+    formData.append("cantidad_disponible", String(item.stock ?? 0));
+    formData.append("activa", String(item.active));
+
+    if (image) {
+      formData.append("imagen", image);
+    }
+
     const response = await fetch(
       previous
         ? `/api/admin/recompensas/${item.id}/`
         : "/api/admin/recompensas/",
       {
-        method: previous ? "PUT" : "POST",
+        method: previous ? "PATCH" : "POST",
         credentials: "include",
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json",
           "X-CSRFToken": csrfToken || "",
         },
-        body: JSON.stringify({
-          nombre: item.name,
-          descripcion: item.description,
-          costo_ecucoins: item.cost,
-          cantidad_disponible: item.stock,
-          activa: item.active,
-        }),
+        body: formData,
       }
     );
 
@@ -4756,14 +4790,15 @@ if (kind === "rewards") {
     const saved = await response.json();
 
     const updatedItem: AdminEntity = {
-      id: String(saved.id),
-      name: saved.nombre,
-      description: saved.descripcion || "",
-      active: saved.activa,
-      cost: saved.costo_ecucoins,
-      stock: saved.cantidad_disponible,
-      redeemed: saved.canjes_realizados,
-    };
+  id: String(saved.id),
+  name: saved.nombre,
+  description: saved.descripcion || "",
+  active: saved.activa,
+  cost: saved.costo_ecucoins,
+  stock: saved.cantidad_disponible,
+  redeemed: saved.canjes_realizados,
+  imageUrl: saved.imagen || previous?.imageUrl || "",
+};
 
     setStore((previousStore) => ({
       ...previousStore,
@@ -4784,7 +4819,9 @@ if (kind === "rewards") {
   }
 }
 
-    // Guardado de Insignias en Django
+
+
+// Guardado de Insignias en Django
 if (kind === "badges") {
   try {
     const previous = source.find((x) => x.id === item.id);
@@ -4794,29 +4831,33 @@ if (kind === "badges") {
       .find((cookie) => cookie.startsWith("csrftoken="))
       ?.split("=")[1];
 
-    // Extraemos los puntos del texto de la condición.
     const puntos = Number(
       item.condition?.match(/\d+/)?.[0] || 0
     );
+
+    const formData = new FormData();
+
+    formData.append("nombre", item.name);
+    formData.append("descripcion", item.description || "");
+    formData.append("puntos_requeridos", String(puntos));
+    formData.append("activo", String(item.active));
+
+    if (image) {
+      formData.append("imagen", image);
+    }
 
     const response = await fetch(
       previous
         ? `/api/admin/insignias/${item.id}/`
         : "/api/admin/insignias/",
       {
-        method: previous ? "PUT" : "POST",
+        method: previous ? "PATCH" : "POST",
         credentials: "include",
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json",
           "X-CSRFToken": csrfToken || "",
         },
-        body: JSON.stringify({
-          nombre: item.name,
-          descripcion: item.description,
-          puntos_requeridos: puntos,
-          activo: item.active,
-        }),
+        body: formData,
       }
     );
 
@@ -4827,13 +4868,14 @@ if (kind === "badges") {
     const saved = await response.json();
 
     const updatedItem: AdminEntity = {
-      id: String(saved.id),
-      name: saved.nombre,
-      description: saved.descripcion || "",
-      active: saved.activo,
-      condition: `Alcanzar ${saved.puntos_requeridos} puntos`,
-      obtained: saved.obtenidas,
-    };
+  id: String(saved.id),
+  name: saved.nombre,
+  description: saved.descripcion || "",
+  active: saved.activo,
+  condition: `Alcanzar ${saved.puntos_requeridos} puntos`,
+  obtained: saved.obtenidas,
+  imageUrl: saved.imagen || previous?.imageUrl || "",
+};
 
     setStore((previousStore) => ({
       ...previousStore,
@@ -4853,6 +4895,8 @@ if (kind === "badges") {
     return;
   }
 }
+
+
 
     // Conservamos el comportamiento anterior para las demás secciones.
     const previous = source.find((x) => x.id === item.id);
@@ -5224,7 +5268,10 @@ if (kind === "badges") {
           </table>
         </section>
       ) : (
-        <div className="management-grid">
+        <div
+  className="management-grid"
+  style={{ alignItems: "start" }}
+>
           {visible.map((item) => (
             <section className="card management-card" key={item.id}>
               <div className="management-card-head">
@@ -5236,6 +5283,30 @@ if (kind === "badges") {
                   {item.active ? "Activo" : "Inactivo"}
                 </Badge>
               </div>
+              {(kind === "badges" || kind === "rewards") && item.imageUrl && (
+  <div
+    style={{
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      width: "100%",
+      margin: "12px 0",
+    }}
+  >
+    <img
+      src={item.imageUrl}
+      alt={`${kind === "badges" ? "Insignia" : "Recompensa"} ${item.name}`}
+      style={{
+        display: "block",
+        width: "120px",
+        height: "120px",
+        objectFit: "contain",
+        objectPosition: "center",
+        margin: "0 auto",
+      }}
+    />
+  </div>
+)}
 
               <h3>{item.name}</h3>
               <p>{item.description}</p>
@@ -5327,7 +5398,7 @@ if (kind === "badges") {
 }
     item={editing}
     isChallenge={kind === "challenges"}
-    allowImage={["points", "rewards", "challenges", "badges"].includes(kind)}
+    allowImage={kind === "rewards" || kind === "badges"}
     faculties={kind === "careers" || kind === "challenges" ? store.faculties : undefined}
     careers={careers}
     wasteTypes={wasteTypes}
