@@ -1,16 +1,11 @@
 
 from pathlib import Path
 
-import torch
 from ultralytics import YOLO
-
-# Limitar los hilos de CPU para evitar sobrecargar Render.
-torch.set_num_threads(1)
-torch.set_num_interop_threads(1)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-MODEL_PATH = BASE_DIR / "modelos_ia" / "yolov8n_ecocampus_v1.pt"
+MODEL_PATH = BASE_DIR / "modelos_ia" / "yolov8n_ecocampus_v1.onnx"
 
 modelo = YOLO(str(MODEL_PATH))
 
