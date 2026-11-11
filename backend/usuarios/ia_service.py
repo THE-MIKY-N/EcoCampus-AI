@@ -1,6 +1,12 @@
 
 from pathlib import Path
+
+import torch
 from ultralytics import YOLO
+
+# Limitar los hilos de CPU para evitar sobrecargar Render.
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -14,7 +20,9 @@ def detectar_residuos(imagen):
         source=imagen,
         conf=0.40,
         verbose=False,
-        imgsz=416
+        imgsz=320,
+        device="cpu",
+        max_det=10
     )
 
     detecciones = []
