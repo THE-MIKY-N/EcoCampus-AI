@@ -33,3 +33,8 @@ backend/EcoCampus_respaldo*.json
 
 # Archivos estáticos generados por Django
 backend/staticfiles/
+
+# Archivos de pruebas YOLO
+runs/
+yolo_pruebas/prueba.jpg
+yolo_pruebas/yolov8n_ecocampus_v1.pt

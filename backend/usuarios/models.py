@@ -18,7 +18,7 @@ class Carrera(models.Model):
     descripcion = models.TextField(blank=True, null=True)
     facultad = models.ForeignKey(
         Facultad,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name="carreras"
     )
     activa = models.BooleanField(default=True)
@@ -64,7 +64,7 @@ class PerfilEstudiante(models.Model):
 
     facultad_relacionada = models.ForeignKey(
         Facultad,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name="estudiantes",
         null=True,
         blank=True
@@ -72,7 +72,7 @@ class PerfilEstudiante(models.Model):
 
     carrera_relacionada = models.ForeignKey(
         Carrera,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name="estudiantes",
         null=True,
         blank=True
@@ -150,8 +150,25 @@ class DeteccionResiduo(models.Model):
 class PuntoReciclaje(models.Model):
     nombre = models.CharField(max_length=150)
     ubicacion = models.CharField(max_length=255)
+    descripcion = models.TextField(blank=True, default="")
+    residuos_aceptados = models.TextField(blank=True, default="")
     codigo_qr = models.CharField(max_length=100, unique=True)
     activo = models.BooleanField(default=True)
+
+    latitud = models.DecimalField(
+        max_digits=10,
+        decimal_places=7,
+        null=True,
+        blank=True
+    )
+
+    longitud = models.DecimalField(
+        max_digits=10,
+        decimal_places=7,
+        null=True,
+        blank=True
+    )
+
     fecha_registro = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -261,6 +278,8 @@ class InsigniaObtenida(models.Model):
     )
 
     fecha_obtencion = models.DateTimeField(auto_now_add=True)
+
+    equipada = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["-fecha_obtencion"]
@@ -477,6 +496,7 @@ class ParticipacionRetoGrupal(models.Model):
     def __str__(self):
         return f"{self.estudiante} - {self.reto}"
 
+
 class ProgresoRetoGrupal(models.Model):
     reto = models.ForeignKey(
         RetoEcologico,
@@ -584,6 +604,21 @@ class CanjeRecompensa(models.Model):
     )
 
     costo_ecucoins = models.PositiveIntegerField()
+    codigo = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False
+    )
+
+    nombre_recompensa = models.CharField(
+        max_length=150,
+        default=""
+    )
+
+    descripcion_recompensa = models.TextField(
+        blank=True,
+        default=""
+    )
     fecha_canje = models.DateTimeField(auto_now_add=True)
 
     estado = models.CharField(

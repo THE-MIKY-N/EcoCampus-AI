@@ -1,5 +1,21 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
+import { BrowserQRCodeReader } from "@zxing/browser";
 import "./App.css";
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from "react-leaflet";
+import L from "leaflet";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+const recyclingIcon = L.divIcon({
+  className: "recycling-marker",
+  html: '<div class="marker-pin"><span>♻</span></div>',
+  iconSize: [36, 36],
+  iconAnchor: [18, 36],
+  popupAnchor: [0, -36],
+});
+
+
+import "leaflet/dist/leaflet.css";
+
 type Role = "student" | "admin";
 type IconName =
   | "home"
@@ -39,6 +55,7 @@ type PerfilEstudiante = {
   usuario: string;
   correo: string;
   identificacion: string;
+  codigo_qr: string;
   facultad: string;
   carrera: string;
   semestre: number;
@@ -82,6 +99,20 @@ const paths: Record<IconName, ReactNode> = {
   coin: <><circle cx="12" cy="12" r="9"/><path d="M14.500 9.500c-.5-1-1.500-1.500-2.500-1.500-1.500 0-2.500 1-2.500 2s1 1.700 2.500 2 2.500 1 2.500 2-1 2-2.500 2c-1 0-2-.5-2.500-1.500M12 6v2M12 16v2"/></>,
 };
 
+const toLocalDateTime = (value?: string | null) => {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "";
+
+  const localDate = new Date(
+    date.getTime() - date.getTimezoneOffset() * 60000
+  );
+
+  return localDate.toISOString().slice(0, 16);
+};
+
 function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -104,14 +135,36 @@ const studentNav: [string, IconName][] = [
   ["Mapa de reciclaje", "map"], ["Recompensas", "gift"], ["Información de reciclaje", "info"], ["Perfil", "user"],
 ];
 const adminNav: [string, IconName][] = [
-  ["Dashboard", "home"], ["Usuarios", "users"], ["Facultades", "leaf"], ["Carreras", "file"],
-  ["Reciclajes", "history"], ["Puntos de reciclaje", "pin"], ["Ranking", "ranking"],
-  ["Recompensas", "gift"], ["Retos", "target"], ["Insignias", "award"],
-  ["Reportes", "chart"], ["Configuración", "settings"],
+  ["Dashboard", "home"],
+  ["Usuarios", "users"],
+  ["Facultades", "leaf"],
+  ["Carreras", "file"],
+  ["Reciclajes", "history"],
+  ["Puntos de reciclaje", "pin"],
+  ["Ranking", "ranking"],
+  ["Recompensas", "gift"],
+  ["Retos", "target"],
+  ["Insignias", "award"],
+  ["Reportes", "chart"],
+  ["Configuración", "settings"],
 ];
 
 
-function Login({ onLogin }: { onLogin: (role: Role) => void }) {
+function Login({
+  onLogin,
+}: {
+  onLogin: (
+    role: Role,
+    usuario: {
+      id: number;
+      username: string;
+      email: string;
+      nombre: string;
+      apellido: string;
+      nombre_completo: string;
+    }
+  ) => void;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -166,15 +219,24 @@ function Login({ onLogin }: { onLogin: (role: Role) => void }) {
         throw new Error(data.error || "No se pudo iniciar sesión.");
       }
 
-      onLogin(data.rol as Role);
-      const perfilResponse = await fetch("/api/perfil/", {
+      const sesionResponse = await fetch("/api/sesion/", {
   credentials: "include",
 });
 
-const perfilData = await perfilResponse.json();
+if (!sesionResponse.ok) {
+  throw new Error("No se pudieron cargar los datos de la sesión.");
+}
 
-console.log("ESTADO DEL PERFIL:", perfilResponse.status);
-console.log("DATOS DEL PERFIL:", perfilData);
+const sesionData = await sesionResponse.json();
+
+if (!sesionData.autenticado || !sesionData.usuario) {
+  throw new Error("No se pudo recuperar la información del usuario.");
+}
+
+onLogin(
+  sesionData.rol as Role,
+  sesionData.usuario
+);
     } catch (err) {
       setError(
         err instanceof Error
@@ -268,6 +330,8 @@ function Sidebar({ role, usuario, page, setPage, logout, open, close }: {
   </aside>;
 }
 
+
+
 function Shell({
   role,
   logout,
@@ -283,12 +347,15 @@ function Shell({
     email: string;
   } | null;
 }) {
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(
     role === "student" ? "Inicio" : "Dashboard"
   );
 
   const [pageHistory, setPageHistory] = useState<string[]>([]);
   const [menu, setMenu] = useState(false);
+
+
 
   const navigate = (nextPage: string) => {
     if (nextPage === page) return;
@@ -307,170 +374,185 @@ function Shell({
   };
 
   // Estados de notificaciones
-  const [notificaciones, setNotificaciones] = useState<any[]>([]);
-  const [mostrarNotificaciones, setMostrarNotificaciones] = useState(false);
-  const [noLeidas, setNoLeidas] = useState(0);
+const [mostrarNotificaciones, setMostrarNotificaciones] = useState(false);
+const notificationRef = useRef<HTMLDivElement>(null);
 
-  const notificationRef = useRef<HTMLDivElement>(null);
+const {
+  data: notificacionesData,
+} = useQuery<{
+  notificaciones: any[];
+  no_leidas: number;
+}>({
+  queryKey: ["notificaciones"],
+  queryFn: async () => {
+    const response = await fetch("/api/notificaciones/", {
+      credentials: "include",
+    });
 
-  // Cargar notificaciones
-  useEffect(() => {
-    const cargarNotificaciones = async () => {
-      try {
-        const response = await fetch("/api/notificaciones/", {
-          credentials: "include",
-        });
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar las notificaciones.");
+    }
 
-        if (!response.ok) return;
+    return response.json();
+  },
+});
 
-        const data = await response.json();
-
-        setNotificaciones(data.notificaciones || []);
-        setNoLeidas(data.no_leidas || 0);
-      } catch (error) {
-        console.error("Error al cargar notificaciones:", error);
-      }
-    };
-
-    cargarNotificaciones();
-  }, []);
+const notificaciones = notificacionesData?.notificaciones ?? [];
+const noLeidas = notificacionesData?.no_leidas ?? 0;
 
   // Marcar una notificación como leída
   const marcarComoLeida = async (id: number) => {
-    try {
-      const csrfResponse = await fetch("/api/csrf/", {
-        credentials: "include",
-      });
+  try {
+    const csrfResponse = await fetch("/api/csrf/", {
+      credentials: "include",
+    });
 
-      if (!csrfResponse.ok) {
-        throw new Error("No se pudo obtener el token CSRF.");
-      }
-
-      const csrfToken = document.cookie
-        .split("; ")
-        .find((cookie) => cookie.startsWith("csrftoken="))
-        ?.split("=")[1];
-
-      if (!csrfToken) {
-        throw new Error("No se encontró el token CSRF.");
-      }
-
-      const response = await fetch("/api/notificaciones/", {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": decodeURIComponent(csrfToken),
-        },
-        body: JSON.stringify({ id }),
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudo marcar como leída.");
-      }
-
-      setNotificaciones((actuales) =>
-        actuales.map((n) =>
-          n.id === id ? { ...n, leida: true } : n
-        )
-      );
-
-      setNoLeidas((actual) => Math.max(0, actual - 1));
-    } catch (error) {
-      console.error("Error al marcar notificación:", error);
+    if (!csrfResponse.ok) {
+      throw new Error("No se pudo obtener el token CSRF.");
     }
-  };
+
+    const csrfToken = document.cookie
+      .split("; ")
+      .find((cookie) => cookie.startsWith("csrftoken="))
+      ?.split("=")[1];
+
+    if (!csrfToken) {
+      throw new Error("No se encontró el token CSRF.");
+    }
+
+    const response = await fetch("/api/notificaciones/", {
+      method: "PATCH",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": decodeURIComponent(csrfToken),
+      },
+      body: JSON.stringify({ id }),
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudo marcar como leída.");
+    }
+
+    queryClient.setQueryData(
+      ["notificaciones"],
+      (actual: { notificaciones: any[]; no_leidas: number } | undefined) => {
+        if (!actual) return actual;
+
+        return {
+          notificaciones: actual.notificaciones.map((n) =>
+            n.id === id ? { ...n, leida: true } : n
+          ),
+          no_leidas: Math.max(0, actual.no_leidas - 1),
+        };
+      }
+    );
+  } catch (error) {
+    console.error("Error al marcar notificación:", error);
+  }
+};
 
   // Marcar todas como leídas
   const marcarTodasComoLeidas = async () => {
-    try {
-      const csrfResponse = await fetch("/api/csrf/", {
-        credentials: "include",
-      });
+  try {
+    const csrfResponse = await fetch("/api/csrf/", {
+      credentials: "include",
+    });
 
-      if (!csrfResponse.ok) {
-        throw new Error("No se pudo obtener el token CSRF.");
-      }
-
-      const csrfToken = document.cookie
-        .split("; ")
-        .find((cookie) => cookie.startsWith("csrftoken="))
-        ?.split("=")[1];
-
-      if (!csrfToken) {
-        throw new Error("No se encontró el token CSRF.");
-      }
-
-      const response = await fetch("/api/notificaciones/", {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": decodeURIComponent(csrfToken),
-        },
-        body: JSON.stringify({ marcar_todas: true }),
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudieron marcar las notificaciones.");
-      }
-
-      setNotificaciones((actuales) =>
-        actuales.map((n) => ({ ...n, leida: true }))
-      );
-
-      setNoLeidas(0);
-    } catch (error) {
-      console.error("Error al marcar todas:", error);
+    if (!csrfResponse.ok) {
+      throw new Error("No se pudo obtener el token CSRF.");
     }
-  };
+
+    const csrfToken = document.cookie
+      .split("; ")
+      .find((cookie) => cookie.startsWith("csrftoken="))
+      ?.split("=")[1];
+
+    if (!csrfToken) {
+      throw new Error("No se encontró el token CSRF.");
+    }
+
+    const response = await fetch("/api/notificaciones/", {
+      method: "PATCH",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": decodeURIComponent(csrfToken),
+      },
+      body: JSON.stringify({ marcar_todas: true }),
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudieron marcar las notificaciones.");
+    }
+
+    queryClient.setQueryData(
+      ["notificaciones"],
+      (actual: { notificaciones: any[]; no_leidas: number } | undefined) => {
+        if (!actual) return actual;
+
+        return {
+          notificaciones: actual.notificaciones.map((n) => ({
+            ...n,
+            leida: true,
+          })),
+          no_leidas: 0,
+        };
+      }
+    );
+  } catch (error) {
+    console.error("Error al marcar todas:", error);
+  }
+};
 
   // Eliminar todas las notificaciones
   const eliminarTodasLasNotificaciones = async () => {
-    if (
-      !window.confirm(
-        "¿Estás seguro de que deseas eliminar todas tus notificaciones?"
-      )
-    ) {
-      return;
+  if (
+    !window.confirm(
+      "¿Estás seguro de que deseas eliminar todas tus notificaciones?"
+    )
+  ) {
+    return;
+  }
+
+  try {
+    const csrfResponse = await fetch("/api/csrf/", {
+      credentials: "include",
+    });
+
+    if (!csrfResponse.ok) {
+      throw new Error("No se pudo obtener el token CSRF.");
     }
 
-    try {
-      const csrfResponse = await fetch("/api/csrf/", {
-        credentials: "include",
-      });
+    const csrfToken = document.cookie
+      .split("; ")
+      .find((cookie) => cookie.startsWith("csrftoken="))
+      ?.split("=")[1];
 
-      if (!csrfResponse.ok) {
-        throw new Error("No se pudo obtener el token CSRF.");
-      }
-
-      const csrfToken = document.cookie
-        .split("; ")
-        .find((cookie) => cookie.startsWith("csrftoken="))
-        ?.split("=")[1];
-
-      if (!csrfToken) {
-        throw new Error("No se encontró el token CSRF.");
-      }
-
-      const response = await fetch("/api/notificaciones/", {
-        method: "DELETE",
-        credentials: "include",
-        headers: {
-          "X-CSRFToken": decodeURIComponent(csrfToken),
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudieron eliminar las notificaciones.");
-      }
-
-      setNotificaciones([]);
-      setNoLeidas(0);
-    } catch (error) {
-      console.error("Error al eliminar notificaciones:", error);
+    if (!csrfToken) {
+      throw new Error("No se encontró el token CSRF.");
     }
-  };
+
+    const response = await fetch("/api/notificaciones/", {
+      method: "DELETE",
+      credentials: "include",
+      headers: {
+        "X-CSRFToken": decodeURIComponent(csrfToken),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudieron eliminar las notificaciones.");
+    }
+
+    queryClient.setQueryData(["notificaciones"], {
+      notificaciones: [],
+      no_leidas: 0,
+    });
+  } catch (error) {
+    console.error("Error al eliminar notificaciones:", error);
+  }
+};
 
   // Cerrar al hacer clic fuera del panel o presionar Escape
   useEffect(() => {
@@ -697,269 +779,143 @@ function StatCard({ icon, label, value, note, tone = "" }: { icon: IconName; lab
 }
 
 const activity = [
-  ["Botella plástica", "Hoy, 09:32", "+15", "Plástico"],
-  ["Lata de aluminio", "Ayer, 14:21", "+20", "Metal"],
-  ["Papel", "8 sep, 10:15", "+10", "Papel"],
-  ["Botella de vidrio", "7 sep, 12:48", "+30", "Vidrio"],
-  ["Restos de frutas", "6 sep, 09:05", "+5", "Orgánico"],
+  ["Plástico", "Hoy, 09:32", "+15", "Plástico"],
+  ["Metal", "Ayer, 14:21", "+20", "Metal"],
+  ["Papel y cartón", "8 sep, 10:15", "+10", "Papel y cartón"],
+  ["Vidrio", "7 sep, 12:48", "+30", "Vidrio"],
+  ["Orgánico", "6 sep, 09:05", "+5", "Orgánico"],
 ];
 
 
 function StudentDashboard({ setPage }: { setPage: (p: string) => void }) {
   const [showQR, setShowQR] = useState(false);
-  const [perfil, setPerfil] = useState<PerfilEstudiante | null>(null);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState("");
-  const [actividad, setActividad] = useState<Record<string, unknown>[]>([]);
-  const [cargandoActividad, setCargandoActividad] = useState(true);
-  const [retosActivos, setRetosActivos] = useState<RetoAPI[]>([]);
-  const [cargandoRetos, setCargandoRetos] = useState(true);
-  const [insignias, setInsignias] = useState<InsigniaAPI[]>([]);
-  const [cargandoInsignias, setCargandoInsignias] = useState(true);
-  const [logros, setLogros] = useState<LogrosAPI | null>(null);
-  const [cargandoLogros, setCargandoLogros] = useState(true);
-  const earnedEcuCoins = perfil?.ecucoins ?? 0;
-  const [ranking, setRanking] = useState<RankingAPI[]>([]);
-  const [cargandoRanking, setCargandoRanking] = useState(true);
 
-  useEffect(() => {
-    let cancelado = false;
 
-    async function cargarPerfil() {
-      try {
-        const response = await fetch("/api/perfil/", {
-          credentials: "include",
-        });
+const {
+  data: perfil = null,
+  isLoading: cargando,
+  error: perfilError,
+} = useQuery<PerfilEstudiante>({
+  queryKey: ["perfil"],
+  queryFn: async () => {
+    const response = await fetch("/api/perfil/", {
+      credentials: "include",
+    });
 
-        if (!response.ok) {
-          throw new Error("No se pudieron cargar tus estadísticas.");
-        }
-
-        const datos: PerfilEstudiante = await response.json();
-
-        if (!cancelado) {
-          setPerfil(datos);
-          setError("");
-        }
-      } catch (err) {
-        if (!cancelado) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Error al cargar los datos."
-          );
-        }
-      } finally {
-        if (!cancelado) {
-          setCargando(false);
-        }
-      }
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar tus estadísticas.");
     }
 
-    cargarPerfil();
+    return response.json();
+  },
+});
 
-    return () => {
-      cancelado = true;
-    };
-  }, []);
+const error = perfilError?.message ?? "";
 
-  useEffect(() => {
-  let cancelado = false;
+const {
+  data: historial = [],
+  isLoading: cargandoActividad,
+} = useQuery<Record<string, unknown>[]>({
+  queryKey: ["historial"],
+  queryFn: async () => {
+    const response = await fetch("/api/historial/", {
+      credentials: "include",
+    });
 
-  async function cargarActividad() {
-    try {
-      setCargandoActividad(true);
-
-      const response = await fetch("/api/historial/", {
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudo cargar la actividad reciente.");
-      }
-
-      const data = await response.json();
-
-      const registros = Array.isArray(data)
-        ? data
-        : Array.isArray(data.results)
-          ? data.results
-          : [];
-
-      if (!cancelado) {
-        setActividad(registros.slice(0, 3));
-      }
-    } catch (err) {
-      console.error("Error al cargar actividad:", err);
-
-      if (!cancelado) {
-        setActividad([]);
-      }
-    } finally {
-      if (!cancelado) {
-        setCargandoActividad(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudo cargar la actividad reciente.");
     }
-  }
 
-  cargarActividad();
+    const data = await response.json();
 
-  return () => {
-    cancelado = true;
-  };
-}, []);
+    return Array.isArray(data)
+      ? data
+      : Array.isArray(data.results)
+        ? data.results
+        : [];
+  },
+});
 
-  useEffect(() => {
-  let cancelado = false;
+const actividad = historial.slice(0, 3);
 
-  async function cargarRetos() {
-    try {
-      setCargandoRetos(true);
+const {
+  data: todosLosRetos = [],
+  isLoading: cargandoRetos,
+} = useQuery<RetoAPI[]>({
+  queryKey: ["retos"],
+  queryFn: async () => {
+    const response = await fetch("/api/retos/", {
+      credentials: "include",
+    });
 
-      const response = await fetch("/api/retos/", {
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudieron cargar los retos.");
-      }
-
-      const datos: RetoAPI[] = await response.json();
-
-      if (!cancelado) {
-        setRetosActivos(
-          datos.filter(
-            (reto) => reto.estado === "Activo" && !reto.completado
-          )
-        );
-      }
-    } catch (err) {
-      console.error("Error al cargar retos:", err);
-
-      if (!cancelado) {
-        setRetosActivos([]);
-      }
-    } finally {
-      if (!cancelado) {
-        setCargandoRetos(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar los retos.");
     }
-  }
 
-  cargarRetos();
+    return response.json();
+  },
+});
 
-  return () => {
-    cancelado = true;
-  };
-}, []);
+const retosActivos = todosLosRetos.filter(
+  (reto) => reto.estado === "Activo" && !reto.completado
+);
 
-  useEffect(() => {
-  let cancelado = false;
+const {
+  data: insignias = [],
+  isLoading: cargandoInsignias,
+} = useQuery<InsigniaAPI[]>({
+  queryKey: ["mis-insignias"],
+  queryFn: async () => {
+    const response = await fetch("/api/mis-insignias/", {
+      credentials: "include",
+    });
 
-  async function cargarInsignias() {
-    try {
-      setCargandoInsignias(true);
-
-      const response = await fetch("/api/mis-insignias/", {
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudieron cargar las insignias.");
-      }
-
-      const datos: InsigniaAPI[] = await response.json();
-
-      if (!cancelado) {
-        setInsignias(datos);
-      }
-    } catch (err) {
-      console.error("Error al cargar insignias:", err);
-
-      if (!cancelado) {
-        setInsignias([]);
-      }
-    } finally {
-      if (!cancelado) {
-        setCargandoInsignias(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar las insignias.");
     }
-  }
 
-  cargarInsignias();
+    return response.json();
+  },
+});
 
-  return () => {
-    cancelado = true;
-  };
-}, []);
+const {
+  data: logros = null,
+  isLoading: cargandoLogros,
+} = useQuery<LogrosAPI>({
+  queryKey: ["mis-logros"],
+  queryFn: async () => {
+    const response = await fetch("/api/mis-logros/", {
+      credentials: "same-origin",
+    });
 
-  useEffect(() => {
-  let cancelado = false;
-
-  async function cargarLogros() {
-    try {
-      const respuesta = await fetch("/api/mis-logros/", {
-        credentials: "same-origin",
-      });
-
-      if (!respuesta.ok) {
-        throw new Error("No se pudieron cargar los logros");
-      }
-
-      const datos: LogrosAPI = await respuesta.json();
-
-      if (!cancelado) {
-        setLogros(datos);
-      }
-    } catch (error) {
-      console.error("Error al cargar los logros:", error);
-    } finally {
-      if (!cancelado) {
-        setCargandoLogros(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar los logros.");
     }
-  }
 
-  cargarLogros();
+    return response.json();
+  },
+});
 
-  return () => {
-    cancelado = true;
-  };
-}, []);
+const {
+  data: ranking = [],
+  isLoading: cargandoRanking,
+} = useQuery<RankingAPI[]>({
+  queryKey: ["ranking"],
+  queryFn: async () => {
+    const response = await fetch("/api/ranking/", {
+      credentials: "same-origin",
+    });
 
-  useEffect(() => {
-  let cancelado = false;
-
-  async function cargarRanking() {
-    try {
-      const respuesta = await fetch("/api/ranking/", {
-        credentials: "same-origin",
-      });
-
-      if (!respuesta.ok) {
-        throw new Error("No se pudo cargar el ranking");
-      }
-
-      const datos: RankingAPI[] = await respuesta.json();
-
-      if (!cancelado) {
-        setRanking(datos);
-      }
-    } catch (error) {
-      console.error("Error al cargar el ranking:", error);
-    } finally {
-      if (!cancelado) {
-        setCargandoRanking(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudo cargar el ranking.");
     }
-  }
 
-  cargarRanking();
+    return response.json();
+  },
+});
 
-  return () => {
-    cancelado = true;
-  };
-}, []);
+const earnedEcuCoins = perfil?.ecucoins ?? 0;
+
 
   const puntos = logros?.puntos ?? perfil?.puntos ?? 0;
 
@@ -1205,7 +1161,7 @@ console.log("Mi posición:", miRanking?.posicion);
           <h2 id="student-qr-title">
             {perfil?.usuario ?? "Estudiante"}
           </h2>
-          <QRCode />
+          <QRCode value={perfil?.codigo_qr ?? ""} />
           <p>Presenta tu identificación para registrar tu reciclaje.</p>
           <Button variant="secondary" onClick={() => setShowQR(false)}>
             Cerrar
@@ -1216,6 +1172,7 @@ console.log("Mi posición:", miRanking?.posicion);
   </>;
 }
 
+
 function Challenge({title,meta,reward,progress}:{title:string;meta:string;reward:string;progress:number}) {
   return <div className="challenge"><div className="challenge-row"><div><b>{title}</b><span>{meta}</span></div><Badge tone="amber">{reward}</Badge></div><div className="progress small"><i style={{width:`${progress}%`}}/></div></div>;
 }
@@ -1223,17 +1180,112 @@ function MiniBadge({title,detail,icon,locked}:{title:string;detail:string;icon:I
   return <div className={`mini-badge ${locked?"locked":""}`}><span><Icon name={icon}/></span><div><b>{title}</b><small>{detail}</small></div></div>;
 }
 
-function QRCode() {
-  const cells = useMemo(() => Array.from({length:225},(_,i)=> ((i*17+i*i*3)%11<5)||([0,1,2,15,16,17,30,31,32,12,13,14,27,28,29,42,43,44,180,181,182,195,196,197,210,211,212].includes(i))),[]);
-  return <div className="qr-code">{cells.map((on,i)=><i key={i} className={on?"on":""}/>)}</div>;
+function QRCode({ value }: { value: string }) {
+  if (!value) {
+    return <p>No se pudo cargar tu identificador QR.</p>;
+  }
+
+  return (
+    <QRCodeSVG
+      value={value}
+      size={220}
+      level="H"
+      includeMargin
+    />
+  );
 }
 
 
 function HistoryPage() {
   const [filter, setFilter] = useState("Todos");
-  const [rows, setRows] = useState<string[][]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const {
+  data: rows = [],
+  isLoading: loading,
+  error: historyError,
+} = useQuery<string[][]>({
+  queryKey: ["historial"],
+  queryFn: async () => {
+    const response = await fetch("/api/historial/", {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudo cargar el historial.");
+    }
+
+    const data = await response.json();
+
+    const registros = Array.isArray(data)
+      ? data
+      : Array.isArray(data.results)
+        ? data.results
+        : [];
+
+    const obtener = (objeto: any, ...claves: string[]) => {
+      for (const clave of claves) {
+        const valor = objeto?.[clave];
+        if (valor !== undefined && valor !== null) return valor;
+      }
+      return "";
+    };
+
+    const normalizados: string[][] = registros.map((registro: any) => {
+      const fechaOriginal = obtener(
+        registro,
+        "fecha",
+        "fecha_registro",
+        "created_at"
+      );
+
+      const fecha = fechaOriginal
+        ? new Date(fechaOriginal).toLocaleDateString("es-EC")
+        : "—";
+
+      const hora = fechaOriginal
+        ? new Date(fechaOriginal).toLocaleTimeString("es-EC", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "—";
+
+      const puntos = obtener(registro, "puntos", "puntos_obtenidos");
+      const ecucoins = obtener(registro, "ecucoins", "ecucoins_obtenidos");
+
+      const residuo = obtener(
+        registro,
+        "residuo_nombre",
+        "material",
+        "tipo_residuo",
+        "residuo"
+      );
+
+      const punto = obtener(
+        registro,
+        "punto_reciclaje_nombre",
+        "punto_nombre",
+        "punto_reciclaje",
+        "ubicacion"
+      );
+
+      const estado = obtener(registro, "estado", "estado_validacion");
+
+      return [
+        fecha,
+        hora,
+        String(residuo?.nombre ?? residuo ?? "No disponible"),
+        String(punto?.nombre ?? punto ?? "No disponible"),
+        String(puntos || 0),
+        String(ecoins || 0),
+        String(estado || "Completado"),
+        fechaOriginal ? String(fechaOriginal).slice(0, 10) : "",
+      ];
+    });
+
+    return normalizados;
+  },
+});
+
+const error = historyError?.message ?? "";
 
   const FILTER_MATERIAL: Record<string, string[]> = {
     Plástico: ["plástic", "botella plástica"],
@@ -1250,155 +1302,6 @@ function HistoryPage() {
   const [pagina, setPagina] = useState(1);
 
   const REGISTROS_POR_PAGINA = 10;
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function cargarHistorial() {
-      try {
-        setLoading(true);
-        setError("");
-
-        const response = await fetch("/api/historial/", {
-          credentials: "include",
-        });
-
-        if (!response.ok) {
-          throw new Error("No se pudo cargar el historial.");
-        }
-
-        const data = await response.json();
-        const registros = Array.isArray(data)
-          ? data
-          : Array.isArray(data.results)
-            ? data.results
-            : [];
-
-        const obtener = (
-          registro: Record<string, unknown>,
-          claves: string[],
-          fallback = ""
-        ): string => {
-          for (const clave of claves) {
-            const valor = registro[clave];
-
-            if (valor !== undefined && valor !== null && valor !== "") {
-              if (typeof valor === "object") {
-                const objeto = valor as Record<string, unknown>;
-                return String(
-                  objeto.nombre ??
-                  objeto.nombre_residuo ??
-                  objeto.descripcion ??
-                  objeto.name ??
-                  fallback
-                );
-              }
-
-              return String(valor);
-            }
-          }
-
-          return fallback;
-        };
-
-        const normalizados: string[][] = registros.map(
-          (registro: Record<string, unknown>) => {
-            const fechaOriginal = obtener(registro, [
-              "fecha",
-              "fecha_registro",
-              "created_at",
-              "registrado_en",
-              "fecha_reciclaje",
-            ]);
-
-            let fecha = "—";
-            let hora = "—";
-
-            if (fechaOriginal) {
-              const fechaDate = new Date(fechaOriginal);
-
-              if (!Number.isNaN(fechaDate.getTime())) {
-                fecha = fechaDate.toLocaleDateString("es-EC");
-                hora = fechaDate.toLocaleTimeString("es-EC", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  hour12: false,
-                });
-              } else {
-                fecha = fechaOriginal;
-                hora = obtener(registro, ["hora"], "—");
-              }
-            }
-
-            const puntos = Number(
-  obtener(registro, [
-    "puntos_otorgados",
-    "puntos",
-    "puntos_obtenidos",
-    "puntos_ganados",
-  ], "0")
-) || 0;
-
-            const ecucoins = obtener(registro, [
-              "ecucoins",
-              "ecu_coins",
-              "monedas",
-            ], String(puntos / POINTS_PER_ECUCOIN));
-
-            return [
-              fecha,
-              hora,
-              obtener(registro, [
-  "tipo_residuo_nombre",
-  "tipo_residuo",
-  "residuo",
-  "material",
-  "nombre_residuo",
-  "tipo",
-], "Residuo"),
-              obtener(registro, [
-  "punto_reciclaje_nombre",
-  "punto_reciclaje",
-  "ubicacion",
-  "punto",
-  "nombre_punto",
-], "—"),
-              obtener(registro, [
-                "resultado",
-                "estado",
-                "verificacion",
-              ], "Registrado"),
-              String(puntos >= 0 ? `+${puntos}` : puntos),
-  `+${ecucoins}`,
-  fechaOriginal ? fechaOriginal.slice(0, 10) : "",
-            ];
-          }
-        );
-
-        if (!cancelled) {
-          setRows(normalizados);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Ocurrió un error al cargar el historial."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    cargarHistorial();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const normalizarTexto = (texto: string) =>
   texto
@@ -1716,7 +1619,13 @@ type CareerRank = { career: string; faculty: string; points: number; position?: 
 type FacultyRank = { faculty: string; points: number; position?: number; };
 
 const POINTS_PER_ECUCOIN = 5;
-const WASTE_TYPES: [string, number][] = [["Botella de plástico",15],["Lata de aluminio",20],["Papel o cartón",10],["Botella de vidrio",30],["Desechos naturales/orgánicos",5]];
+const WASTE_TYPES: [string, number][] = [
+  ["Plástico", 15],
+  ["Metal", 20],
+  ["Papel y cartón", 10],
+  ["Vidrio", 30],
+  ["Orgánico", 5]
+];
 
 const FAC = {
   ci: "Ciencias e Ingenierías",
@@ -1919,103 +1828,93 @@ function RankingPage() {
   const [rankingType, setRankingType] = useState<RankingType>("Estudiantes");
   const [period, setPeriod] = useState<RankingPeriod>("Todo el tiempo");
   const [showFull, setShowFull] = useState(false);
-  const [students, setStudents] = useState<StudentRank[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [currentUser, setCurrentUser] = useState("");
+  const {
+  data: rankingData = { students: [], currentUser: "" },
+  isLoading: loading,
+  error: rankingError,
+} = useQuery<{
+  students: StudentRank[];
+  currentUser: string;
+}>({
+  queryFn: async () => {
+  const [rankingResponse, sessionResponse] = await Promise.all([
+    fetch(
+      `/api/ranking/?periodo=${
+        period === "Todo el tiempo"
+          ? "todo"
+          : period === "Este mes"
+            ? "mes"
+            : "semana"
+      }`,
+      { credentials: "include" }
+    ),
+    fetch("/api/sesion/", { credentials: "include" }),
+  ]);
 
-  useEffect(() => {
-    let cancelled = false;
+  if (!rankingResponse.ok) {
+    throw new Error("No se pudo cargar el ranking.");
+  }
 
-    async function cargarRanking() {
-      try {
-        setLoading(true);
-        setError("");
+  if (!sessionResponse.ok) {
+    throw new Error("No se pudo comprobar el usuario actual.");
+  }
 
-        const [rankingResponse, sessionResponse] = await Promise.all([
-          fetch(
-  `/api/ranking/?periodo=${
-    period === "Todo el tiempo"
-      ? "todo"
-      : period === "Este mes"
-        ? "mes"
-        : "semana"
-  }`,
-  { credentials: "include" }
-),
-          fetch("/api/sesion/", { credentials: "include" }),
-        ]);
+  const registrosData = await rankingResponse.json();
+  const sessionData = await sessionResponse.json();
 
-        if (!rankingResponse.ok) {
-          throw new Error("No se pudo cargar el ranking.");
-        }
+  const registros = Array.isArray(registrosData)
+    ? registrosData
+    : Array.isArray(registrosData.results)
+      ? registrosData.results
+      : [];
 
-        if (!sessionResponse.ok) {
-          throw new Error("No se pudo comprobar el usuario actual.");
-        }
+  const usuarioActual = sessionData.autenticado
+    ? String(sessionData.usuario?.username ?? "")
+    : "";
 
-        const rankingData = await rankingResponse.json();
-        const sessionData = await sessionResponse.json();
+  const estudiantes: StudentRank[] = registros.map(
+    (
+      registro: {
+        posicion?: number;
+        usuario?: string;
+        facultad?: string;
+        carrera?: string;
+        puntos?: number;
+      },
+      index: number
+    ) => {
+      const name = registro.usuario ?? "Estudiante";
+      const isUser =
+        name.toLowerCase() === usuarioActual.toLowerCase();
 
-        const registros = Array.isArray(rankingData)
-          ? rankingData
-          : Array.isArray(rankingData.results)
-            ? rankingData.results
-            : [];
-
-        const usuarioActual = sessionData.autenticado
-          ? String(sessionData.usuario?.username ?? "")
-          : "";
-
-        const estudiantes: StudentRank[] = registros.map(
-          (registro: {
-            posicion?: number;
-            usuario?: string;
-            facultad?: string;
-            carrera?: string;
-            puntos?: number;
-          }, index: number) => {
-            const name = registro.usuario ?? "Estudiante";
-            const isUser =
-              name.toLowerCase() === usuarioActual.toLowerCase();
-
-            return {
-              position: registro.posicion ?? index + 1,
-              name,
-              faculty: registro.facultad ?? "No disponible",
-              career: registro.carrera ?? "No disponible",
-              points: Number(registro.puntos ?? 0),
-              level: 0,
-              isUser,
-            };
-          }
-        );
-
-        estudiantes.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-
-        if (!cancelled) {
-          setStudents(estudiantes);
-          setCurrentUser(usuarioActual);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Ocurrió un error al consultar el ranking."
-          );
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      return {
+        position: registro.posicion ?? index + 1,
+        name,
+        faculty: registro.facultad ?? "No disponible",
+        career: registro.carrera ?? "No disponible",
+        points: Number(registro.puntos ?? 0),
+        level: 0,
+        isUser,
+      };
     }
+  );
 
-    cargarRanking();
+  estudiantes.sort(
+    (a, b) => (a.position ?? 0) - (b.position ?? 0)
+  );
 
-    return () => {
-      cancelled = true;
-    };
-  }, [period]);
+  return {
+    students: estudiantes,
+    currentUser: usuarioActual,
+  };
+},
+});
+
+const students = rankingData.students;
+const currentUser = rankingData.currentUser;
+const error = rankingError?.message ?? "";
+
+
 
   const descriptions: Record<RankingType, string> = {
     Estudiantes: "Conoce a los estudiantes que lideran el cambio sostenible en el campus.",
@@ -2246,136 +2145,99 @@ const MAX_EQUIPPED = 3;
 
 
 function BadgesPage({ equipped }: { equipped: string[] }) {
-  const [insigniasObtenidas, setInsigniasObtenidas] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [puntos, setPuntos] = useState(0);
-  const [nivelActual, setNivelActual] = useState<{
-  nombre: string;
-} | null>(null);
-  const [badges, setBadges] = useState<
-  {
-    id: number;
-    nombre: string;
-    descripcion: string;
-    imagen: string | null;
-    puntos_requeridos: number;
-  }[]
->([]);
+  const {
+  data: logrosData = {
+    insignias_obtenidas: [],
+    puntos: 0,
+    nivel_actual: null,
+  },
+  isLoading: loadingLogros,
+  error: logrosError,
+} = useQuery<{
+  insignias_obtenidas: unknown[];
+  puntos: number;
+  nivel_actual: { nombre: string } | null;
+}>({
+  queryKey: ["mis-logros"],
+  queryFn: async () => {
+    const response = await fetch("/api/mis-logros/", {
+      credentials: "include",
+    });
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function cargarLogros() {
-      try {
-        setLoading(true);
-        setError("");
-
-        const response = await fetch("/api/mis-logros/", {
-          credentials: "include",
-        });
-
-        if (!response.ok) {
-          throw new Error("No se pudieron cargar tus insignias.");
-        }
-
-        const data = await response.json();
-        console.log("RESPUESTA DEL HISTORIAL:", data);
-
-        const obtenidas: unknown[] = Array.isArray(data.insignias_obtenidas)
-          ? data.insignias_obtenidas
-          : [];
-
-        const identificadores = obtenidas.flatMap((item) => {
-          if (typeof item === "string" || typeof item === "number") {
-            return [String(item).trim().toLowerCase()];
-          }
-
-          if (item && typeof item === "object") {
-            const registro = item as Record<string, unknown>;
-
-            return [
-              registro.id,
-              registro.insignia_id,
-              registro.codigo,
-              registro.nombre,
-              registro.titulo,
-              registro.title,
-              registro.name,
-            ]
-              .filter(
-                (valor): valor is string | number =>
-                  typeof valor === "string" || typeof valor === "number"
-              )
-              .map((valor) => String(valor).trim().toLowerCase());
-          }
-
-          return [];
-        });
-
-        if (!cancelled) {
-  setInsigniasObtenidas(identificadores);
-  setPuntos(Number(data.puntos ?? 0));
-  setNivelActual(data.nivel_actual ?? null);
-}
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Ocurrió un error al consultar tus insignias."
-          );
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar tus insignias.");
     }
 
-    cargarLogros();
+    return response.json();
+  },
+});
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+const error = logrosError?.message ?? "";
+  const {
+  data: badges = [],
+  isLoading: loadingBadges,
+} = useQuery<any[]>({
+  queryKey: ["insignias-disponibles"],
+  queryFn: async () => {
+    const response = await fetch("/api/insignias-disponibles/", {
+      credentials: "include",
+    });
 
-  useEffect(() => {
-  let cancelled = false;
 
-  async function cargarInsignias() {
-    try {
-      const response = await fetch("/api/insignias-disponibles/", {
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudieron cargar las insignias disponibles.");
-      }
-
-      const data = await response.json();
-
-      if (!cancelled) {
-        setBadges(data);
-      }
-    } catch (error) {
-      console.error("Error al cargar insignias:", error);
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar las insignias disponibles.");
     }
-  }
 
-  cargarInsignias();
+    return response.json();
+  },
+});
+  const loading = loadingLogros || loadingBadges;
 
-  return () => {
-    cancelled = true;
-  };
-}, []);
+  const obtenidas = logrosData.insignias_obtenidas;
+
+  const insigniasObtenidas = obtenidas.flatMap((item) => {
+    if (typeof item === "string" || typeof item === "number") {
+      return [String(item).trim().toLowerCase()];
+    }
+
+    if (item && typeof item === "object") {
+      const registro = item as Record<string, unknown>;
+
+      return [
+        registro.id,
+        registro.insignia_id,
+        registro.codigo,
+        registro.nombre,
+        registro.titulo,
+        registro.title,
+        registro.name,
+      ]
+        .filter(
+          (valor): valor is string | number =>
+            typeof valor === "string" || typeof valor === "number"
+        )
+        .map((valor) => String(valor).trim().toLowerCase());
+    }
+
+    return [];
+  });
+
+  const puntos = Number(logrosData.puntos ?? 0);
+  const nivelActual = logrosData.nivel_actual;
 
 
-  const totalObtenidas = badges.filter((badge) =>
-    insigniasObtenidas.some(
-      (identificador) =>
-        identificador === String(badge.id).toLowerCase() ||
-        identificador === badge.nombre.trim().toLowerCase()
-    )
-  ).length;
+
+  const totalObtenidas = badges.filter((badge) => {
+  const nombre = String(
+    badge.nombre ?? badge.name ?? badge.titulo ?? ""
+  ).trim().toLowerCase();
+
+  return insigniasObtenidas.some(
+    (identificador) =>
+      identificador === String(badge.id ?? "").toLowerCase() ||
+      (nombre !== "" && identificador === nombre)
+  );
+}).length;
 
   const porcentaje = badges.length > 0
   ? Math.round((totalObtenidas / badges.length) * 100)
@@ -2430,11 +2292,17 @@ function BadgesPage({ equipped }: { equipped: string[] }) {
 
           <div className="badge-grid">
             {badges.map((badge) => {
-              const earned = insigniasObtenidas.some(
-                (identificador) =>
-                  identificador === String(badge.id).toLowerCase() ||
-                  identificador === badge.title.trim().toLowerCase()
-              );
+              const badgeId = String(badge.id ?? "").trim().toLowerCase();
+
+const badgeNombre = String(
+  badge.nombre ?? badge.title ?? badge.name ?? badge.titulo ?? ""
+).trim().toLowerCase();
+
+const earned = insigniasObtenidas.some(
+  (identificador) =>
+    identificador === badgeId ||
+    (badgeNombre !== "" && identificador === badgeNombre)
+);
 
               return (
                 <div
@@ -2488,32 +2356,175 @@ function BadgesPage({ equipped }: { equipped: string[] }) {
   );
 }
 
-function EquippedSlots({ids,onSlot,highlight}:{ids:string[];onSlot?:(id:string)=>void;highlight?:boolean}){
- return <div className={`equipped-slots ${highlight?"replace":""}`}>{Array.from({length:MAX_EQUIPPED},(_,i)=>{const badge=BADGES.find(b=>b.id===ids[i]);
-  if(!badge) return <div className="equipped-slot empty" key={i}><span><Icon name="award" size={22}/></span><small>Espacio libre</small></div>;
-  const content=<><span><Icon name={badge.icon} size={24}/></span><b>{badge.title}</b></>;
-  return onSlot?<button type="button" className="equipped-slot" key={badge.id} onClick={()=>onSlot(badge.id)}>{content}</button>:<div className="equipped-slot" key={badge.id}>{content}</div>})}</div>;
+
+function EquippedSlots({
+  ids,
+  badges,
+  onSlot,
+  highlight,
+}: {
+  ids: string[];
+  badges: BadgeItem[];
+  onSlot?: (id: string) => void;
+  highlight?: boolean;
+}) {
+  return (
+    <div className={`equipped-slots ${highlight ? "replace" : ""}`}>
+      {Array.from({ length: MAX_EQUIPPED }, (_, i) => {
+        const badge = badges.find(b => b.id === ids[i]);
+
+        if (!badge) {
+          return (
+            <div className="equipped-slot empty" key={i}>
+              <span><Icon name="award" size={22} /></span>
+              <small>Espacio libre</small>
+            </div>
+          );
+        }
+
+        const content = (
+          <>
+            <span><Icon name={badge.icon} size={24} /></span>
+            <b>{badge.title}</b>
+          </>
+        );
+
+        return onSlot ? (
+          <button
+            type="button"
+            className="equipped-slot"
+            key={badge.id}
+            onClick={() => onSlot(badge.id)}
+          >
+            {content}
+          </button>
+        ) : (
+          <div className="equipped-slot" key={badge.id}>
+            {content}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
-function EditBadgesModal({equipped,onSave,onClose}:{equipped:string[];onSave:(ids:string[])=>void;onClose:()=>void}){
- const [draft,setDraft]=useState(equipped);
- const [pending,setPending]=useState<string|null>(null);
- const pendingBadge=BADGES.find(b=>b.id===pending);
- const pick=(id:string)=>{
-  if(draft.includes(id)){setDraft(draft.filter(x=>x!==id));setPending(null);return;}
-  if(draft.length<MAX_EQUIPPED){setDraft([...draft,id]);setPending(null);return;}
-  setPending(id);
- };
- const replace=(id:string)=>{ if(!pending) return setDraft(draft.filter(x=>x!==id)); setDraft(draft.map(x=>x===id?pending:x)); setPending(null); };
- return <div className="modal-backdrop" onClick={onClose}><div className="modal edit-badges-modal" role="dialog" aria-modal="true" aria-labelledby="edit-badges-title" onClick={e=>e.stopPropagation()}>
-  <button className="modal-close" aria-label="Cerrar" onClick={onClose}><Icon name="close"/></button>
-  <Badge>{draft.length} de {MAX_EQUIPPED} equipadas</Badge><h2 id="edit-badges-title">Editar insignias</h2>
-  <p>{pendingBadge?`Toca la insignia equipada que quieres reemplazar por "${pendingBadge.title}".`:"Las insignias equipadas se muestran públicamente en tu perfil. Puedes equipar hasta 3."}</p>
-  <EquippedSlots ids={draft} onSlot={replace} highlight={!!pending}/>
-  <div className="owned-badges">{EARNED_BADGES.map(b=>{const on=draft.includes(b.id);return <button type="button" key={b.id} className={`owned-badge ${on?"on":""} ${pending===b.id?"pending":""}`} onClick={()=>pick(b.id)} aria-pressed={on}><span><Icon name={b.icon} size={20}/></span><div><b>{b.title}</b><small>{on?"Equipada · toca para quitar":pending===b.id?"Elige a quién reemplaza":"Toca para equipar"}</small></div>{on&&<Icon name="check" size={16}/>}</button>})}</div>
-  <div className="flow-actions"><Button variant="secondary" onClick={onClose}>Cancelar</Button><Button onClick={()=>{onSave(draft);onClose();}}>Guardar</Button></div>
- </div></div>;
+
+function EditBadgesModal({
+  equipped,
+  badges,
+  onSave,
+  onClose,
+}: {
+  equipped: string[];
+  badges: BadgeItem[];
+  onSave: (ids: string[]) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(equipped);
+  const [pending, setPending] = useState<string | null>(null);
+
+  const pendingBadge = badges.find(b => b.id === pending);
+
+  const pick = (id: string) => {
+    if (draft.includes(id)) {
+      setDraft(draft.filter(x => x !== id));
+      setPending(null);
+      return;
+    }
+
+    if (draft.length < MAX_EQUIPPED) {
+      setDraft([...draft, id]);
+      setPending(null);
+      return;
+    }
+
+    setPending(id);
+  };
+
+  const replace = (id: string) => {
+    if (!pending) {
+      return setDraft(draft.filter(x => x !== id));
+    }
+
+    setDraft(draft.map(x => x === id ? pending : x));
+    setPending(null);
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal edit-badges-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-badges-title"
+        onClick={e => e.stopPropagation()}
+      >
+        <button className="modal-close" aria-label="Cerrar" onClick={onClose}>
+          <Icon name="close" />
+        </button>
+
+        <Badge>{draft.length} de {MAX_EQUIPPED} equipadas</Badge>
+
+        <h2 id="edit-badges-title">Editar insignias</h2>
+
+        <p>
+          {pendingBadge
+            ? `Toca la insignia equipada que quieres reemplazar por "${pendingBadge.title}".`
+            : "Las insignias equipadas se muestran públicamente en tu perfil. Puedes equipar hasta 3."}
+        </p>
+
+        <EquippedSlots
+          ids={draft}
+          badges={badges}
+          onSlot={replace}
+          highlight={!!pending}
+        />
+
+        <div className="owned-badges">
+          {badges.map(b => {
+            const on = draft.includes(b.id);
+
+            return (
+              <button
+                type="button"
+                key={b.id}
+                className={`owned-badge ${on ? "on" : ""} ${pending === b.id ? "pending" : ""}`}
+                onClick={() => pick(b.id)}
+                aria-pressed={on}
+              >
+                <span><Icon name={b.icon} size={20} /></span>
+
+                <div>
+                  <b>{b.title}</b>
+                  <small>
+                    {on
+                      ? "Equipada · toca para quitar"
+                      : pending === b.id
+                        ? "Elige a quién reemplaza"
+                        : "Toca para equipar"}
+                  </small>
+                </div>
+
+                {on && <Icon name="check" size={16} />}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flow-actions">
+          <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => {
+            onSave(draft);
+            onClose();
+          }}>
+            Guardar
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
+
 
 // [title, description, progress_text, reward, deadline, progress_pct, featured, icon]
 type ChallengeItem = [string, string, string, string, string, number, boolean, IconName];
@@ -2595,57 +2606,38 @@ function ChallengesPage() {
     "Activos" | "Completados" | "Próximos"
   >("Activos");
 
-  const [retos, setRetos] = useState<RetoAPI[]>([]);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState("");
+
+const queryClient = useQueryClient();
+
+const {
+  data: retos = [],
+  isLoading: cargando,
+  error: errorConsulta,
+} = useQuery<RetoAPI, Error>({
+  queryKey: ["retos"],
+  queryFn: async () => {
+    const respuesta = await fetch("/api/retos/", {
+      credentials: "same-origin",
+    });
+
+    if (!respuesta.ok) {
+      throw new Error(
+        respuesta.status === 401 || respuesta.status === 403
+          ? "Inicia sesión para consultar tus retos."
+          : "No se pudieron cargar los retos."
+      );
+    }
+
+    return respuesta.json();
+  },
+});
+
+const error = errorConsulta?.message ?? "";
+
   const [procesando, setProcesando] = useState<number | null>(null);
   const [mensaje, setMensaje] = useState("");
   const [retoSeleccionado, setRetoSeleccionado] = useState<RetoAPI | null>(null);
 
-  useEffect(() => {
-    let cancelado = false;
-
-    async function cargarRetos() {
-      try {
-        const respuesta = await fetch("/api/retos/", {
-          credentials: "same-origin",
-        });
-
-        if (!respuesta.ok) {
-          throw new Error(
-            respuesta.status === 401 || respuesta.status === 403
-              ? "Inicia sesión para consultar tus retos."
-              : "No se pudieron cargar los retos."
-          );
-        }
-
-        const datos: RetoAPI[] = await respuesta.json();
-
-        if (!cancelado) {
-          setRetos(datos);
-          setError("");
-        }
-      } catch (e) {
-        if (!cancelado) {
-          setError(
-            e instanceof Error
-              ? e.message
-              : "Ocurrió un error al cargar los retos."
-          );
-        }
-      } finally {
-        if (!cancelado) {
-          setCargando(false);
-        }
-      }
-    }
-
-    cargarRetos();
-
-    return () => {
-      cancelado = true;
-    };
-  }, []);
 
   const participarEnReto = async (retoId: number) => {
   try {
@@ -2688,8 +2680,9 @@ function ChallengesPage() {
 
     const datos: RetoAPI[] = await actualizacion.json();
 
-    setRetos(datos);
-    setMensaje("Te has inscrito correctamente en el reto.");
+queryClient.setQueryData<RetoAPI[]>(["retos"], datos);
+
+setMensaje("Te has inscrito correctamente en el reto.");
   } catch (e) {
     setMensaje(
       e instanceof Error
@@ -3015,106 +3008,108 @@ function ChallengesPage() {
 }
 
 
-
 type RecyclingPoint = {
   id: number;
   nombre: string;
   ubicacion: string;
+  descripcion: string;
+  residuos_aceptados: string;
   activo: boolean;
+  latitud: number | string | null;
+  longitud: number | string | null;
 };
+
+function MapClickHandler({
+  onMapClick,
+}: {
+  onMapClick: (lat: number, lng: number) => void;
+}) {
+  useMapEvents({
+    click(event) {
+      onMapClick(event.latlng.lat, event.latlng.lng);
+    },
+  });
+
+  return null;
+}
+
+
 
 function CampusMap({ admin = false }: { admin?: boolean }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [filter, setFilter] = useState("Todos");
-  const [locations, setLocations] = useState<RecyclingPoint[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPoints() {
-      try {
-        const response = await fetch("/api/puntos-reciclaje/", {
-          credentials: "same-origin",
-        });
-
-        if (!response.ok) {
-          throw new Error(
-            response.status === 401 || response.status === 403
-              ? "Inicia sesión para consultar los puntos de reciclaje."
-              : "No se pudieron cargar los puntos de reciclaje."
-          );
-        }
-
-        const data: RecyclingPoint[] = await response.json();
-
-        if (!cancelled) {
-          setLocations(data);
-
-          setSelected((current) => {
-            if (current !== null && data.some((point) => point.id === current)) {
-              return current;
-            }
-
-            return data.length > 0 ? data[0].id : null;
-          });
-
-          setError("");
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Ocurrió un error al cargar los puntos."
-          );
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
+  const {
+  data: locations = [],
+  isLoading: loading,
+  error: pointsError,
+} = useQuery<RecyclingPoint[], Error>({
+  queryKey: admin ? ["admin", "puntos-reciclaje"] : ["puntos-reciclaje"],
+  queryFn: async () => {
+    const response = await fetch(
+      admin
+        ? "/api/admin/puntos-reciclaje/"
+        : "/api/puntos-reciclaje/",
+      {
+        credentials: "same-origin",
       }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        response.status === 401 || response.status === 403
+          ? "Inicia sesión para consultar los puntos de reciclaje."
+          : "No se pudieron cargar los puntos de reciclaje."
+      );
     }
 
-    loadPoints();
+    return response.json();
+  },
+});
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+const error = pointsError?.message ?? "";
 
-  const selectedPoint = locations.find((point) => point.id === selected);
+    const [addingPoint, setAddingPoint] = useState(false);
+  const [newPointCoords, setNewPointCoords] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+
+  const [newPointName, setNewPointName] = useState("");
+  const [newPointLocation, setNewPointLocation] = useState("");
+  const [newPointQr, setNewPointQr] = useState("");
+  const [savingPoint, setSavingPoint] = useState(false);
+
+
+  const selectedPoint =
+  locations.find((point) => point.id === selected) ?? locations[0] ?? null;
 
   const filteredLocations =
-    filter === "Todos"
-      ? locations
-      : locations.filter((point) =>
-          point.ubicacion.toLowerCase().includes(filter.toLowerCase())
-        );
+  filter === "Todos"
+    ? locations
+    : locations.filter(
+        (point) =>
+          (point.ubicacion || "").toLowerCase() === filter.toLowerCase()
+      );
 
   return (
     <>
-      <PageHeader
-        title={admin ? "Mapa de utilización" : "Mapa de reciclaje"}
-        subtitle={
-          admin
-            ? "Consulta los puntos de reciclaje registrados en el campus."
-            : "Encuentra los puntos de reciclaje registrados en el campus."
-        }
-      />
 
-      <div className="map-filters">
-        {["Todos", "Bloque", "Biblioteca", "Cafetería", "Laboratorios"].map(
-          (option) => (
-            <button
-              key={option}
-              className={filter === option ? "active" : ""}
-              onClick={() => setFilter(option)}
-            >
-              {option}
-            </button>
-          )
-        )}
-      </div>
+
+
+
+     <div className="map-filters">
+  {["Todos", "Bloque", "Biblioteca", "Cafetería", "Laboratorios", "Otro"].map(
+    (option) => (
+      <button
+        key={option}
+        className={filter === option ? "active" : ""}
+        onClick={() => setFilter(option)}
+      >
+        {option}
+      </button>
+    )
+  )}
+</div>
 
       {loading && (
         <section className="card table-card">
@@ -3140,7 +3135,7 @@ function CampusMap({ admin = false }: { admin?: boolean }) {
         </section>
       )}
 
-      {!loading && !error && locations.length === 0 && (
+      {!loading && !error && locations.length === 0 && !admin && (
         <section className="card table-card">
           <div className="empty-preview">
             <Icon name="pin" size={42} />
@@ -3153,43 +3148,111 @@ function CampusMap({ admin = false }: { admin?: boolean }) {
         </section>
       )}
 
-      {!loading && !error && locations.length > 0 && (
+      {!loading && !error && (locations.length > 0 || admin) && (
+          <>
         <div className="map-layout">
-          <div className="campus-map">
-            <img
-              className="map-image"
-              src="https://images.unsplash.com/photo-1764926125989-ae0acf67fbf8?w=1400&h=900&fit=crop&auto=format"
-              alt="Imagen ilustrativa del campus universitario"
-            />
+<div className="campus-map">
 
-            <div className="map-tint" />
-            <div className="map-compass">N</div>
+  <MapContainer
+  center={[-2.1490621784763038, -79.60285927370869]}
+  zoom={18}
+  minZoom={17}
+  maxZoom={20}
+  maxBounds={[
+    [-2.1520, -79.6060],
+    [-2.1460, -79.5990],
+  ]}
+  maxBoundsViscosity={1.0}
+  scrollWheelZoom={true}
+  style={{
+    height: "560px",
+    width: "100%",
+    borderRadius: "16px",
+  }}
+>
+    <TileLayer
+      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    />
 
-            {filteredLocations.map((point, index) => (
-              <button
-                key={point.id}
-                className={`map-pin p${(index % 5) + 1} ${
-                  selected === point.id ? "active" : ""
-                }`}
-                onClick={() => setSelected(point.id)}
-                title={point.ubicacion}
-              >
-                <Icon name="recycle" size={16} />
-                <span>
-                  {point.nombre} · {point.ubicacion}
-                </span>
-              </button>
-            ))}
+    {admin && addingPoint && (
+  <MapClickHandler
+    onMapClick={(lat, lng) => {
+      setNewPointCoords({ lat, lng });
+    }}
+  />
+)}
 
-            <div className="map-legend">
-              <b>Puntos registrados</b>
-              <span>
-                <i className="low" />
-                {locations.length} puntos activos
-              </span>
-            </div>
-          </div>
+    {filteredLocations
+  .filter(
+    (point) =>
+      point.latitud !== null &&
+      point.longitud !== null &&
+      Number.isFinite(Number(point.latitud)) &&
+      Number.isFinite(Number(point.longitud))
+  )
+  .map((point) => (
+    <Marker
+      key={point.id}
+      position={[
+        Number(point.latitud),
+        Number(point.longitud),
+      ]}
+      icon={recyclingIcon}
+      eventHandlers={{
+        click: () => setSelected(point.id),
+      }}
+    >
+      <Popup>
+  <div style={{ minWidth: "190px" }}>
+    <strong>{point.nombre}</strong>
 
+    <p style={{ margin: "6px 0" }}>
+      <strong>Tipo:</strong> {point.ubicacion}
+    </p>
+
+    <p style={{ margin: "6px 0" }}>
+      <strong>Descripción:</strong>{" "}
+      {point.descripcion || "Sin descripción disponible"}
+    </p>
+
+    <p style={{ margin: "6px 0" }}>
+      <strong>Residuos aceptados:</strong>{" "}
+      {point.residuos_aceptados || "No especificados"}
+    </p>
+
+    <p style={{ margin: "6px 0" }}>
+      <strong>Estado:</strong>{" "}
+      {point.activo ? "Activo" : "Inactivo"}
+    </p>
+  </div>
+</Popup>
+    </Marker>
+  ))}
+
+    {admin && addingPoint && newPointCoords && (
+  <Marker
+    position={[
+      newPointCoords.lat,
+      newPointCoords.lng,
+    ]}
+    icon={recyclingIcon}
+  >
+    <Popup>
+      Ubicación seleccionada para el nuevo punto
+    </Popup>
+  </Marker>
+)}
+  </MapContainer>
+
+  <div className="map-legend">
+    <b>Campus UNEMI</b>
+    <span>
+      <i className="low" />
+      {locations.length} puntos registrados
+    </span>
+  </div>
+</div>
           <aside className="card location-detail">
             {selectedPoint ? (
               <>
@@ -3236,6 +3299,50 @@ function CampusMap({ admin = false }: { admin?: boolean }) {
             )}
           </aside>
         </div>
+          {admin && addingPoint && newPointCoords && (
+  <section className="card" style={{ padding: "24px", marginTop: "20px" }}>
+    <h3>Registrar nuevo punto de reciclaje</h3>
+
+    <p>
+      Coordenadas seleccionadas:
+      {newPointCoords.lat.toFixed(7)},
+      {newPointCoords.lng.toFixed(7)}
+    </p>
+
+    <div style={{ display: "grid", gap: "12px" }}>
+      <label>
+        Nombre del punto
+        <input
+          type="text"
+          value={newPointName}
+          onChange={(e) => setNewPointName(e.target.value)}
+          placeholder="Ej. Punto de reciclaje Biblioteca"
+        />
+      </label>
+
+      <label>
+        Ubicación o descripción
+        <input
+          type="text"
+          value={newPointLocation}
+          onChange={(e) => setNewPointLocation(e.target.value)}
+          placeholder="Ej. Frente a la biblioteca"
+        />
+      </label>
+
+      <label>
+        Código QR
+        <input
+          type="text"
+          value={newPointQr}
+          onChange={(e) => setNewPointQr(e.target.value)}
+          placeholder="Código identificador del punto"
+        />
+      </label>
+    </div>
+    </section>
+)}
+        </>
       )}
     </>
   );
@@ -3250,94 +3357,139 @@ function ProfilePage({equipped,setEquipped}:{equipped:string[];setEquipped:(ids:
  const [draftDescription,setDraftDescription]=useState(description);
  const field=(label:string,value:string)=><label key={label}>{label}<div className="input-wrap"><input disabled value={value} readOnly/><Icon name="lock" size={16}/></div></label>;
 
-  const [perfil, setPerfil] = useState<PerfilEstudiante | null>(null);
-  const [cargandoPerfil, setCargandoPerfil] = useState(true);
-  const [errorPerfil, setErrorPerfil] = useState("");
-  const [miPosicion, setMiPosicion] = useState<number | null>(null);
-  const [cargandoRanking, setCargandoRanking] = useState(true);
+  const {
+  data: perfil = null,
+  isLoading: cargandoPerfil,
+  error: errorPerfil,
+} = useQuery<PerfilEstudiante>({
+  queryKey: ["perfil"],
+  queryFn: async () => {
+    const response = await fetch("/api/perfil/", {
+      credentials: "include",
+    });
 
-  useEffect(() => {
-    let cancelado = false;
-
-    async function cargarPerfil() {
-      try {
-        const response = await fetch("/api/perfil/", {
-          credentials: "include",
-        });
-
-        if (!response.ok) {
-          throw new Error("No se pudo cargar el perfil.");
-        }
-
-        const datos: PerfilEstudiante = await response.json();
-
-        if (!cancelado) {
-          setPerfil(datos);
-          setErrorPerfil("");
-        }
-      } catch (error) {
-        if (!cancelado) {
-          setErrorPerfil(
-            error instanceof Error
-              ? error.message
-              : "Error al cargar el perfil."
-          );
-        }
-      } finally {
-        if (!cancelado) {
-          setCargandoPerfil(false);
-        }
-      }
+    if (!response.ok) {
+      throw new Error("No se pudo cargar el perfil.");
     }
 
-    cargarPerfil();
+    return response.json();
+  },
+});
 
-    return () => {
-      cancelado = true;
-    };
-  }, []);
+  const {
+  data: logrosData,
+  isLoading: cargandoInsignias,
+} = useQuery<{
+  insignias_obtenidas: {
+  id: number;
+  nombre: string;
+  descripcion: string;
+  fecha_obtencion: string;
+  equipada: boolean;
+}[];
+}>({
+  queryKey: ["mis-logros"],
+  queryFn: async () => {
+    const response = await fetch("/api/mis-logros/", {
+      credentials: "include",
+    });
 
-  useEffect(() => {
-  let cancelado = false;
-
-  async function cargarRanking() {
-    try {
-      const response = await fetch("/api/ranking/", {
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudo cargar el ranking.");
-      }
-
-      const datos: RankingAPI[] = await response.json();
-
-      const estudiante = datos.find(
-        (item) =>
-          item.usuario.toLowerCase() ===
-          (perfil?.usuario ?? "").toLowerCase()
-      );
-
-      if (!cancelado) {
-        setMiPosicion(estudiante?.posicion ?? null);
-      }
-    } catch (error) {
-      console.error("Error al cargar la posición:", error);
-    } finally {
-      if (!cancelado) {
-        setCargandoRanking(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar las insignias.");
     }
-  }
 
-  if (perfil?.usuario) {
-    cargarRanking();
-  }
+    return response.json();
+  },
+});
 
-  return () => {
-    cancelado = true;
-  };
-}, [perfil?.usuario]);
+const insigniasDisponibles: BadgeItem[] = (
+  logrosData?.insignias_obtenidas ?? []
+).map((insignia) => ({
+  id: String(insignia.id),
+  title: insignia.nombre,
+  desc: insignia.descripcion,
+  icon: "award",
+  progress: 100,
+}));
+
+useEffect(() => {
+  if (!logrosData) return;
+
+  const insigniasEquipadas = logrosData.insignias_obtenidas
+    .filter((insignia) => insignia.equipada)
+    .map((insignia) => String(insignia.id));
+
+  setEquipped(insigniasEquipadas);
+}, [logrosData, setEquipped]);
+
+
+const guardarInsignias = async (ids: string[]) => {
+  try {
+    const csrfToken = document.cookie
+      .split("; ")
+      .find((cookie) => cookie.startsWith("csrftoken="))
+      ?.split("=")[1];
+
+    if (!csrfToken) {
+      throw new Error("No se encontró el token CSRF.");
+    }
+
+    const response = await fetch("/api/mis-logros/", {
+      method: "PATCH",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": decodeURIComponent(csrfToken),
+      },
+      body: JSON.stringify({
+        insignias_ids: ids.map(Number),
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "No se pudieron guardar las insignias.");
+    }
+
+    setEquipped(ids);
+    setNotice("Insignias destacadas actualizadas.");
+    setEditingBadges(false);
+  } catch (error) {
+    setNotice(
+      error instanceof Error
+        ? error.message
+        : "Ocurrió un error al guardar las insignias."
+    );
+  }
+};
+
+
+const {
+  data: ranking = [],
+  isLoading: cargandoRanking,
+} = useQuery<RankingAPI[]>({
+  queryKey: ["ranking"],
+  queryFn: async () => {
+    const response = await fetch("/api/ranking/", {
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudo cargar el ranking.");
+    }
+
+    return response.json();
+  },
+});
+
+const miPosicion =
+  ranking.find(
+    (item) =>
+      item.usuario.toLowerCase() ===
+      (perfil?.usuario ?? "").toLowerCase()
+  )?.posicion ?? null;
+
 
  return <><PageHeader title="Mi perfil" subtitle="Consulta tu información institucional y tu impacto personal." action={<div className="flex flex-wrap items-center gap-2"><Button variant="secondary" className="profile-edit" onClick={()=>{setDraftDescription(description);setEditing(true);setNotice("")}}>Editar perfil</Button><Button variant="secondary" className="profile-edit" onClick={()=>setEditingBadges(true)}>Editar insignias</Button></div>}/><div className="profile-layout"><section className="card profile-main"><div className="profile-cover"/><div className="profile-identity"><div className="avatar xl">
   {perfil?.usuario
@@ -3366,7 +3518,10 @@ function ProfilePage({equipped,setEquipped}:{equipped:string[];setEquipped:(ids:
  <label className="profile-description">Descripción<textarea disabled={!editing} value={editing?draftDescription:description} maxLength={160} rows={3} placeholder="Cuéntales a otros estudiantes sobre ti..." onChange={e=>{setDraftDescription(e.target.value);setNotice("")}}/><div className="description-foot"><small>{(editing?draftDescription:description).length} / 160 caracteres</small>{editing&&<div className="flex items-center gap-2"><Button variant="secondary" onClick={()=>setEditing(false)}>Cancelar</Button><Button onClick={()=>{setDescription(draftDescription);setEditing(false);setNotice("Descripción actualizada.")}}>Guardar descripción</Button></div>}</div></label></div>
  {notice&&<div className="profile-note"><div className="safe-note" role="status"><Icon name="check" size={16}/>{notice}</div></div>}
  <div className="profile-note"><div className="safe-note"><Icon name="lock" size={16}/>Tu información universitaria es administrada por la institución y no puede modificarse desde esta plataforma.</div></div>
- <div className="profile-badges"><div className="profile-badges-head"><div><h3>Insignias destacadas</h3><p>Reconocimientos obtenidos por tu actividad</p></div></div><EquippedSlots ids={equipped}/></div></section><aside>
+ <div className="profile-badges"><div className="profile-badges-head"><div><h3>Insignias destacadas</h3><p>Reconocimientos obtenidos por tu actividad</p></div></div><EquippedSlots
+  ids={equipped}
+  badges={insigniasDisponibles}
+/></div></section><aside>
 <div className="profile-stats">
   <StatCard
     icon="star"
@@ -3395,128 +3550,79 @@ function ProfilePage({equipped,setEquipped}:{equipped:string[];setEquipped:(ids:
   }
 />
 </div>
-</aside></div>{editingBadges&&<EditBadgesModal equipped={equipped} onSave={ids=>{setEquipped(ids);setNotice("Insignias destacadas actualizadas.")}} onClose={()=>setEditingBadges(false)}/>}</>;
+</aside>
+ </div>{editingBadges && (
+  <EditBadgesModal
+    equipped={equipped}
+    badges={insigniasDisponibles}
+    onSave={guardarInsignias}
+    onClose={() => setEditingBadges(false)}
+  />
+)}</>;
 }
 
 
 function PointsPage({ setPage }: { setPage: (p: string) => void }) {
-  const [perfil, setPerfil] = useState<PerfilEstudiante | null>(null);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState("");
-  const [logros, setLogros] = useState<LogrosAPI | null>(null);
-  const [cargandoLogros, setCargandoLogros] = useState(true);
-  const [movimientos, setMovimientos] = useState<HistorialAPI[]>([]);
-  const [cargandoMovimientos, setCargandoMovimientos] = useState(true);
+  const {
+  data: perfil = null,
+  isLoading: cargando,
+  error: perfilError,
+} = useQuery<PerfilEstudiante>({
+  queryKey: ["perfil"],
+  queryFn: async () => {
+    const response = await fetch("/api/perfil/", {
+      credentials: "include",
+    });
 
-  useEffect(() => {
-    let cancelado = false;
-
-    async function cargarPerfil() {
-      try {
-        const response = await fetch("/api/perfil/", {
-          credentials: "include",
-        });
-
-        if (!response.ok) {
-          throw new Error("No se pudo cargar tu saldo de puntos.");
-        }
-
-        const datos: PerfilEstudiante = await response.json();
-
-        if (!cancelado) {
-          setPerfil(datos);
-          setError("");
-        }
-      } catch (err) {
-        if (!cancelado) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Error al cargar tus puntos."
-          );
-        }
-      } finally {
-        if (!cancelado) {
-          setCargando(false);
-        }
-      }
+    if (!response.ok) {
+      throw new Error("No se pudo cargar tu saldo de puntos.");
     }
 
-    cargarPerfil();
+    return response.json();
+  },
+});
 
-    return () => {
-      cancelado = true;
-    };
-  }, []);
+const {
+  data: logros = null,
+  isLoading: cargandoLogros,
+} = useQuery<LogrosAPI>({
+  queryKey: ["mis-logros"],
+  queryFn: async () => {
+    const response = await fetch("/api/mis-logros/", {
+      credentials: "include",
+    });
 
-  useEffect(() => {
-  let cancelado = false;
-
-  async function cargarLogros() {
-    try {
-      const response = await fetch("/api/mis-logros/", {
-        credentials: "same-origin",
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudieron cargar los niveles.");
-      }
-
-      const datos: LogrosAPI = await response.json();
-
-      if (!cancelado) {
-        setLogros(datos);
-      }
-    } catch (err) {
-      console.error("Error al cargar los niveles:", err);
-    } finally {
-      if (!cancelado) {
-        setCargandoLogros(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar los niveles.");
     }
-  }
 
-  cargarLogros();
+    return response.json();
+  },
+});
 
-  return () => {
-    cancelado = true;
-  };
-}, []);
+const {
+  data: movimientos = [],
+  isLoading: cargandoMovimientos,
+} = useQuery<HistorialAPI[]>({
+  queryKey: ["historial"],
+  queryFn: async () => {
+    const response = await fetch("/api/historial/", {
+      credentials: "include",
+    });
 
-  useEffect(() => {
-  let cancelado = false;
-
-  async function cargarMovimientos() {
-    try {
-      const response = await fetch("/api/historial/", {
-        credentials: "same-origin",
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudo cargar el historial.");
-      }
-
-      const datos = await response.json();
-      const registros = Array.isArray(datos) ? datos : datos.results ?? [];
-
-      if (!cancelado) {
-        setMovimientos(registros.slice(0, 5));
-      }
-    } catch (error) {
-      console.error("Error al cargar movimientos:", error);
-    } finally {
-      if (!cancelado) {
-        setCargandoMovimientos(false);
-      }
+    if (!response.ok) {
+      throw new Error("No se pudo cargar el historial.");
     }
-  }
 
-  cargarMovimientos();
+    const datos = await response.json();
+    const registros = Array.isArray(datos) ? datos : datos.results ?? [];
 
-  return () => {
-    cancelado = true;
-  };
-}, []);
+    return registros.slice(0, 5);
+  },
+});
+
+const error = perfilError?.message ?? "";
+
 
   const puntos = logros?.puntos ?? perfil?.puntos ?? 0;
 
@@ -3667,6 +3773,7 @@ type Redeemed = {
   cost: number;
   date: string;
   applied: boolean;
+  code: string;
 };
 const REWARDS: Reward[] = [
   { id: "sticker", name: "Sticker ecológico digital", desc: "Un sticker exclusivo para decorar tu perfil.", cost: 10, icon: "leaf", action: "Usar" },
@@ -3681,86 +3788,234 @@ const REWARDS: Reward[] = [
   { id: "especial", name: "Recompensa especial de EcoCampus", desc: "La distinción más alta del programa EcoCampus.", cost: 100, icon: "coin", action: null },
 ];
 
-function RewardsPage({balance,redeemed,redeem,toggleApplied}:{balance:number;redeemed:Redeemed[];redeem: (r: Reward) => Promise<void>;toggleApplied:(id:string)=>void}){
- const [catalog, setCatalog] = useState<Reward[]>([]);
-  const [loadingRewards, setLoadingRewards] = useState(true);
 
-  useEffect(() => {
-    const cargarRecompensas = async () => {
-      try {
-        const response = await fetch("/api/recompensas/", {
-          method: "GET",
-          credentials: "include",
-          headers: {
-            Accept: "application/json",
-          },
-        });
+function RewardsPage({
+  balance,
+  redeemed,
+  redeem,
+  toggleApplied
+}: {
+  balance: number;
+  redeemed: Redeemed[];
+  redeem: (r: Reward) => Promise<void>;
+  toggleApplied: (id: string) => void;
+}) {
+  const [notice, setNotice] = useState("");
+  const [tab, setTab] = useState<"available" | "mine">("available");
 
-        if (!response.ok) {
-          throw new Error("No se pudieron cargar las recompensas.");
-        }
 
-        const data = await response.json();
+const {
+  data: catalog = [],
+  isLoading: loadingRewards,
+  error: rewardsError,
+} = useQuery<Reward[], Error>({
+  queryKey: ["recompensas"],
+  queryFn: async () => {
+    const response = await fetch("/api/recompensas/", {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
 
-        const recompensas: Reward[] = data.map((item: any) => ({
-          id: String(item.id),
-          name: item.nombre,
-          desc: item.descripcion,
-          cost: item.costo_ecucoins,
-          icon: "gift",
-          action: null,
-        }));
-
-        setCatalog(recompensas);
-      } catch (error) {
-        console.error("Error al cargar recompensas:", error);
-        setNotice("No se pudieron cargar las recompensas.");
-      } finally {
-        setLoadingRewards(false);
-      }
-    };
-
-    cargarRecompensas();
-  }, []);
- const [notice,setNotice]=useState("");
- const [tab,setTab]=useState<"available"|"mine">("available");
- const available = catalog.filter(
-  r => !redeemed.some(x => x.rewardId === Number(r.id))
-);
- if (loadingRewards) {
-  return <section className="card panel">
-    <p className="muted">Cargando recompensas...</p>
-  </section>;
-}
- return <><PageHeader title="Recompensas" subtitle="Canjea tus EcuCoins por recompensas ecológicas."/>
-  <div className="points-hero"><div><span>Mis EcuCoins</span><strong>{balance.toLocaleString("es-ES")}</strong><b>EcuCoins</b><p>Obtienes 1 EcuCoin por cada 5 puntos de reciclaje.</p></div><div><Badge>5 PUNTOS = 1 ECUCOIN</Badge><h2>Equivalencias</h2><div className="coin-rates">{WASTE_TYPES.map(x=><span key={x[0]}>{x[0]}<b>+{x[1]/POINTS_PER_ECUCOIN}</b></span>)}</div></div></div>
-  <div className="tabs"><button className={tab==="available"?"active":""} onClick={()=>setTab("available")}>Recompensas disponibles <Badge>{available.length}</Badge></button><button className={tab==="mine"?"active":""} onClick={()=>setTab("mine")}>Mis recompensas <Badge>{redeemed.length}</Badge></button></div>
-  {notice&&<div className="safe-note" role="status"><Icon name="check" size={16}/>{notice}</div>}
-  {tab==="available"&&(available.length===0?<section className="card panel"><p className="muted">Ya canjeaste todas las recompensas disponibles.</p></section>:<div className="reward-grid">{available.map(r=>{const can=balance>=r.cost;return <div className="card badge-card reward-card" key={r.id}><div className="badge-art"><Icon name={r.icon} size={35}/></div><Badge tone="amber">{r.cost} EcuCoins</Badge><h3>{r.name}</h3><p>{r.desc}</p>
-
-<Button
-  disabled={!can}
-  onClick={async () => {
-    try {
-      await redeem(r);
-      setNotice(
-        `¡Canje exitoso! "${r.name}" se guardó en Mis recompensas (-${r.cost} EcuCoins).`
-      );
-    } catch (error) {
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "No se pudo realizar el canje."
-      );
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar las recompensas.");
     }
-  }}
->
-  {can ? "Canjear" : `Te faltan ${r.cost - balance} EcuCoins`}
-</Button>
 
-  </div>})}</div>)}
-  {tab==="mine"&&(redeemed.length===0?<section className="card panel"><p className="muted">Aún no has canjeado recompensas. Canjea la primera en "Recompensas disponibles".</p></section>:<div className="reward-grid">{redeemed.map(x=>{const r = catalog.find(y => Number(y.id) === x.rewardId);if(!r)return null;return <div className="card badge-card reward-card" key={r.id}><div className="badge-art"><Icon name={r.icon} size={35}/></div><Badge tone={x.applied?"blue":"green"}>{r.action?(x.applied?"En uso":"Canjeada"):"Canjeada"}</Badge><h3>{r.name}</h3><p>{r.desc}</p><small>Canjeada el {x.date}</small>{r.action?<Button variant={x.applied?"secondary":"primary"} onClick={()=>toggleApplied(r.id)}>{x.applied?"Quitar":r.action}</Button>:<Button variant="secondary" disabled>Canjeada</Button>}</div>})}</div>)}</>;
+    const data = await response.json();
+
+    return data.map((item: any) => ({
+      id: String(item.id),
+      name: item.nombre,
+      desc: item.descripcion,
+      cost: item.costo_ecucoins,
+      icon: "gift",
+      action: null,
+    }));
+  },
+});
+
+
+
+  const available = catalog.filter(
+    r => !redeemed.some(x => x.rewardId === Number(r.id))
+  );
+
+  if (loadingRewards) {
+    return (
+      <section className="card panel">
+        <p className="muted">Cargando recompensas...</p>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Recompensas"
+        subtitle="Canjea tus EcuCoins por recompensas ecológicas."
+      />
+
+      <div className="points-hero">
+        <div>
+          <span>Mis EcuCoins</span>
+          <strong>{balance.toLocaleString("es-ES")}</strong>
+          <b>EcuCoins</b>
+          <p>Obtienes 1 EcuCoin por cada 5 puntos de reciclaje.</p>
+        </div>
+
+        <div>
+          <Badge>5 PUNTOS = 1 ECUCOIN</Badge>
+          <h2>Equivalencias</h2>
+          <div className="coin-rates">
+            {WASTE_TYPES.map(x => (
+              <span key={x[0]}>
+                {x[0]}<b>+{x[1] / POINTS_PER_ECUCOIN}</b>
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="tabs">
+        <button
+          className={tab === "available" ? "active" : ""}
+          onClick={() => setTab("available")}
+        >
+          Recompensas disponibles <Badge>{available.length}</Badge>
+        </button>
+
+        <button
+          className={tab === "mine" ? "active" : ""}
+          onClick={() => setTab("mine")}
+        >
+          Mis recompensas <Badge>{redeemed.length}</Badge>
+        </button>
+      </div>
+
+      {notice && (
+        <div className="safe-note" role="status">
+          <Icon name="check" size={16} />
+          {notice}
+        </div>
+      )}
+
+      {tab === "available" && (
+        available.length === 0 ? (
+          <section className="card panel">
+            <p className="muted">
+              Ya canjeaste todas las recompensas disponibles.
+            </p>
+          </section>
+        ) : (
+          <div className="reward-grid">
+            {available.map(r => {
+              const can = balance >= r.cost;
+
+              return (
+                <div className="card badge-card reward-card" key={r.id}>
+                  <div className="badge-art">
+                    <Icon name={r.icon} size={35} />
+                  </div>
+
+                  <Badge tone="amber">{r.cost} EcuCoins</Badge>
+                  <h3>{r.name}</h3>
+                  <p>{r.desc}</p>
+
+                  <Button
+                    disabled={!can}
+                    onClick={async () => {
+                      try {
+                        await redeem(r);
+                        setNotice(
+                          `¡Canje exitoso! "${r.name}" se guardó en Mis recompensas (-${r.cost} EcuCoins).`
+                        );
+                      } catch (error) {
+                        setNotice(
+                          error instanceof Error
+                            ? error.message
+                            : "No se pudo realizar el canje."
+                        );
+                      }
+                    }}
+                  >
+                    {can
+                      ? "Canjear"
+                      : `Te faltan ${r.cost - balance} EcuCoins`}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {tab === "mine" && (
+        redeemed.length === 0 ? (
+          <section className="card panel">
+            <p className="muted">
+              Aún no has canjeado recompensas. Canjea la primera en "Recompensas disponibles".
+            </p>
+          </section>
+        ) : (
+          <div className="reward-grid">
+            {redeemed.map(x => {
+              const r = catalog.find(
+                y => Number(y.id) === x.rewardId
+              );
+
+              return (
+                <div className="card badge-card reward-card" key={x.id}>
+                  <div className="badge-art">
+                    <Icon name={r?.icon ?? "gift"} size={35} />
+                  </div>
+
+                  <Badge tone="green">Canjeada</Badge>
+
+                  <h3>{x.name}</h3>
+                  <p>{x.description || "Sin descripción disponible."}</p>
+
+                  <div className="voucher-details">
+                    <p><strong>Comprobante de canje</strong></p>
+                    <div className="voucher-qr">
+  <QRCodeSVG
+    value={`ECOCAMPUS-VOUCHER:${x.code}`}
+    size={180}
+    level="H"
+    includeMargin={true}
+  />
+
+</div>
+                    <small>Canjeada el {x.date}</small>
+                    <p><strong>Costo:</strong> {x.cost} EcuCoins</p>
+                    <p className="muted">
+                      Presenta este comprobante para reclamar tu recompensa.
+                    </p>
+                  </div>
+
+                  {r?.action ? (
+                    <Button
+                      variant={x.applied ? "secondary" : "primary"}
+                      onClick={() => toggleApplied(x.id)}
+                    >
+                      {x.applied ? "Quitar" : r.action}
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" disabled>
+                      Canjeada
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+    </>
+  );
 }
+
 
 
 type Bin = { id: string; name: string; colorName: string; color: string; dark: string; accepts: string; examples: string[]; avoid: string };
@@ -3785,11 +4040,13 @@ function RecyclingInfoPage(){
 }
 
 function StudentPage({page,setPage}:{page:string;setPage:(p:string)=>void}){
- const [spent,setSpent]=useState(0);
- const [redeemed,setRedeemed]=useState<Redeemed[]>([]);
+ const queryClient = useQueryClient();
  const [equipped,setEquipped]=useState<string[]>([]);
- const cargarMisRecompensas = async () => {
-  try {
+ const {
+  data: redeemed = [],
+} = useQuery<Redeemed[]>({
+  queryKey: ["mis-recompensas"],
+  queryFn: async () => {
     const response = await fetch("/api/mis-recompensas/", {
       method: "GET",
       credentials: "include",
@@ -3804,8 +4061,9 @@ function StudentPage({page,setPage}:{page:string;setPage:(p:string)=>void}){
 
     const data = await response.json();
 
-    const recompensas: Redeemed[] = data.map((item: any) => ({
+    return data.map((item: any) => ({
       id: String(item.id),
+      code: item.codigo,
       rewardId: Number(item.recompensa_id),
       name: item.nombre,
       description: item.descripcion,
@@ -3813,15 +4071,8 @@ function StudentPage({page,setPage}:{page:string;setPage:(p:string)=>void}){
       date: new Date(item.fecha_canje).toLocaleDateString("es-EC"),
       applied: item.estado === "utilizada",
     }));
-
-    setRedeemed(recompensas);
-  } catch (error) {
-    console.error("Error al cargar mis recompensas:", error);
-  }
-};
- useEffect(() => {
-  cargarMisRecompensas();
-}, []);
+  },
+});
 
  const actualizarEstadoCanje = async (
   id: string,
@@ -3860,24 +4111,26 @@ function StudentPage({page,setPage}:{page:string;setPage:(p:string)=>void}){
     throw new Error(data.error || "No se pudo actualizar el estado.");
   }
 };
- const [perfil, setPerfil] = useState<PerfilEstudiante | null>(null);
- const earnedEcuCoins = perfil?.ecucoins ?? 0;
-    const [cargandoPerfil, setCargandoPerfil] = useState(true);
+ const {
+  data: perfil = null,
+  isLoading: cargandoPerfil,
+} = useQuery<PerfilEstudiante>({
+  queryKey: ["perfil"],
+  queryFn: async () => {
+    const datos = await obtenerPerfil();
 
-    useEffect(() => {
-      async function cargarPerfil() {
-        try {
-          const datos = await obtenerPerfil();
-          setPerfil(datos);
-        } catch (error) {
-          console.error("Error al cargar el perfil:", error);
-        } finally {
-          setCargandoPerfil(false);
-        }
-      }
+    if (!datos) {
+      throw new Error("No se pudo cargar el perfil del estudiante.");
+    }
 
-      cargarPerfil();
-    }, []);
+    return datos;
+  },
+});
+
+const earnedEcuCoins = perfil?.ecucoins ?? 0;
+
+
+
     if (cargandoPerfil) {
       return <div>Cargando perfil del estudiante...</div>;
     }
@@ -3890,7 +4143,9 @@ function StudentPage({page,setPage}:{page:string;setPage:(p:string)=>void}){
  if(page==="Ranking") return <RankingPage/>;
  if(page==="Insignias") return <BadgesPage equipped={equipped}/>;
  if(page==="Retos") return <ChallengesPage/>;
- if(page==="Mapa de reciclaje") return <CampusMap/>;
+ if(page === "Mapa de reciclaje") return <CampusMap />;
+
+ if(page === "Mapa de utilización") return <CampusMap admin={true} />;
 
 if (page === "Recompensas") {
   const canjearRecompensa = async (r: Reward) => {
@@ -3930,10 +4185,11 @@ if (page === "Recompensas") {
         throw new Error(data.error || "No se pudo canjear la recompensa.");
       }
 
-      await cargarMisRecompensas();
-
-const perfilActualizado = await obtenerPerfil();
-setPerfil(perfilActualizado);
+      await Promise.all([
+  queryClient.invalidateQueries({ queryKey: ["mis-recompensas"] }),
+  queryClient.invalidateQueries({ queryKey: ["perfil"] }),
+  queryClient.invalidateQueries({ queryKey: ["recompensas"] }),
+]);
     } catch (error) {
   throw error;
 }
@@ -3954,7 +4210,10 @@ setPerfil(perfilActualizado);
 
   try {
     await actualizarEstadoCanje(id, nuevoEstado);
-    await cargarMisRecompensas();
+
+await queryClient.invalidateQueries({
+  queryKey: ["mis-recompensas"],
+});
   } catch (error) {
     console.error("Error al actualizar el canje:", error);
   }
@@ -3992,6 +4251,10 @@ type AdminEntity = {
   completed?: number;
   condition?: string;
   obtained?: number;
+  latitud?: number | null;
+  longitud?: number | null;
+  qrCode?: string;
+  imageUrl?: string;
 
   // Configuración de retos ecológicos
   modality?: "INDIVIDUAL" | "GRUPAL";
@@ -4033,16 +4296,18 @@ type AdminUser = {
 type AdminRecycling={id:string;userId:string;date:string;time:string;waste:string;point:string;points:number;status:"Validado"|"Pendiente"|"Rechazado"};
 type AdminStore={faculties:AdminEntity[];careers:AdminEntity[];users:AdminUser[];recyclings:AdminRecycling[];points:AdminEntity[];rewards:AdminEntity[];challenges:AdminEntity[];badges:AdminEntity[]};
 
-const createAdminStore=():AdminStore=>({
- faculties:FACULTY_NAMES.map((name,i)=>({id:`fac-${i}`,name,description:"Facultad de la Universidad Estatal de Milagro",active:true})),
- careers:CAREER_RANKING.map((c,i)=>({id:`car-${i}`,name:c.career,faculty:c.faculty,description:"Carrera de grado UNEMI",active:true})),
- users:STUDENT_RANKING.map((s,i)=>({id:s.isUser?"lucia":`user-${i}`,name:s.name,email:s.isUser?"lucia.mendez@unemi.edu.ec":`${s.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(" ",".")}@unemi.edu.ec`,code:s.isUser?"ECU-2026-01842":`ECU-2026-${String(2000+i).padStart(5,"0")}`,identification:s.isUser?"0954872163":`095000${String(1000+i)}`,faculty:s.faculty,career:s.career,course:s.isUser?"5.º semestre · A":`${i%8+1}.º semestre · ${i%2?"B":"A"}`,points:s.points,level:s.level,recyclings:s.isUser?48:Math.max(4,Math.round(s.points/28)),active:i%13!==0,badges:s.isUser?["Primer reciclaje","Reciclador activo","Separación correcta","Eco madrugador","Primer reto"]:["Primer reciclaje"],challenges:s.isUser?["Semana sin plástico","Eco constancia"]:["Semana sin plástico"]})),
- recyclings:[["lucia","10/09/2026","09:32","Botella plástica","Punto C",15,"Validado"],["lucia","09/09/2026","14:21","Lata de aluminio","Punto A",20,"Validado"],["lucia","08/09/2026","10:15","Papel","Punto B",10,"Validado"],["lucia","07/09/2026","12:48","Botella de vidrio","Punto E",30,"Validado"],["user-1","10/09/2026","10:12","Botella plástica","Punto A",15,"Pendiente"],["user-3","10/09/2026","11:36","Papel","Punto B",10,"Pendiente"]].map((r,i)=>({id:`rec-${i}`,userId:String(r[0]),date:String(r[1]),time:String(r[2]),waste:String(r[3]),point:String(r[4]),points:Number(r[5]),status:r[6] as AdminRecycling["status"]})),
- points: [],
- rewards:REWARDS.map((r,i)=>({id:r.id,name:r.name,description:r.desc,cost:r.cost*5,stock:25-i,redeemed:12+i,active:i<8})),
- challenges:challengesRaw.map((c,i)=>({id:`challenge-${i}`,name:c[0],description:c[1],objective:c[2],period:`Hasta ${c[4]}`,reward:Number(c[3].match(/\d+/)?.[0]||100),participants:84-i*11,completed:32-i*5,active:true})),
- badges:BADGES.map((b,i)=>({id:b.id,name:b.title,description:b.desc,condition:b.desc,obtained:210-i*19,active:true})),
+
+const createAdminStore = (): AdminStore => ({
+  faculties: [],
+  careers: [],
+  users: [],
+  recyclings: [],
+  points: [],
+  rewards: [],
+  challenges: [],
+  badges: [],
 });
+
 
 function ConfirmModal({title,text,confirmLabel,onConfirm,onCancel}:{title:string;text:string;confirmLabel:string;onConfirm:()=>void;onCancel:()=>void}){return <div className="modal-backdrop" onClick={onCancel}><div className="modal admin-modal" role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()}><button type="button" className="modal-close" aria-label="Cerrar" onClick={onCancel}><Icon name="close"/></button><h2>{title}</h2><p>{text}</p><div className="flow-actions"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button variant="danger" onClick={onConfirm}>{confirmLabel}</Button></div></div></div>}
 function AdminNotice({text}:{text:string}){return text?<div className="admin-notice" role="status"><Icon name="check" size={17}/>{text}</div>:null}
@@ -4056,8 +4321,9 @@ function AdminForm({
   wasteTypes,
   isChallenge = false,
   allowImage = false,
-  onSave,
+    onSave,
   onClose,
+  initialCoordinates,
 }: {
   title: string;
   item?: AdminEntity;
@@ -4068,9 +4334,27 @@ function AdminForm({
   allowImage?: boolean;
   onSave: (v: AdminEntity, image?: File) => void;
   onClose: () => void;
+  initialCoordinates?: {
+  lat: number;
+  lng: number;
+};
 }) {
 
- const [draft,setDraft]=useState<AdminEntity>(item||{id:"",name:"",description:"",active:true,faculty:faculties?.[0]?.name||""});
+ const [draft, setDraft] = useState<AdminEntity>({
+  ...(item || {
+    id: "",
+    name: "",
+    description: "",
+    active: true,
+    faculty: faculties?.[0]?.name || "",
+  }),
+  ...(initialCoordinates
+    ? {
+        latitud: initialCoordinates.lat,
+        longitud: initialCoordinates.lng,
+      }
+    : {}),
+});
  const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const esFormularioReto = isChallenge;
  return <div className="modal-backdrop" onClick={onClose}><form className="modal admin-modal entity-form" onSubmit={e=>{e.preventDefault();if (draft.name.trim()) {
@@ -4111,7 +4395,65 @@ function AdminForm({
       ))}
     </select>
   </label>
-)}{item?.location!==undefined&&<><label>Ubicación<input value={draft.location||""} onChange={e=>setDraft({...draft,location:e.target.value})}/></label><label>Residuos aceptados<input value={draft.accepted||""} onChange={e=>setDraft({...draft,accepted:e.target.value})}/></label></>}{item?.cost!==undefined&&<div className="field-row"><label>
+)}{item?.location!==undefined&&<><label>
+  Tipo de ubicación
+  <select
+    value={draft.location || "Otro"}
+    onChange={e =>
+      setDraft({ ...draft, location: e.target.value })
+    }
+  >
+    <option value="Bloque">Bloque</option>
+    <option value="Biblioteca">Biblioteca</option>
+    <option value="Cafetería">Cafetería</option>
+    <option value="Laboratorios">Laboratorios</option>
+    <option value="Otro">Otro</option>
+  </select>
+</label><label>Residuos aceptados<input value={draft.accepted||""} onChange={e=>setDraft({...draft,accepted:e.target.value})}/></label></>}
+   {item?.location !== undefined && (
+  <div className="form-wide">
+    <label>Selecciona la ubicación en el mapa</label>
+
+    <MapContainer
+      center={[
+        draft.latitud ?? -2.1490621784763038,
+        draft.longitud ?? -79.60285927370869,
+      ]}
+      zoom={18}
+      style={{ height: "280px", width: "100%", borderRadius: "12px" }}
+    >
+      <TileLayer
+        attribution='&copy; OpenStreetMap'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      />
+
+
+      <MapClickHandler
+        onMapClick={(lat, lng) =>
+          setDraft({
+            ...draft,
+            latitud: lat,
+            longitud: lng,
+          })
+        }
+      />
+
+      {draft.latitud != null && draft.longitud != null && (
+        <Marker
+          position={[draft.latitud, draft.longitud]}
+          icon={recyclingIcon}
+        />
+      )}
+    </MapContainer>
+
+    <p>
+      {draft.latitud != null && draft.longitud != null
+        ? `Coordenadas: ${draft.latitud.toFixed(7)}, ${draft.longitud.toFixed(7)}`
+        : "Haz clic en el mapa para seleccionar la ubicación."}
+    </p>
+  </div>
+)}
+   {item?.cost!==undefined&&<div className="field-row"><label>
   Costo en EcuCoins
   <input
     type="number"
@@ -4288,36 +4630,37 @@ function AdminEntities({
   subtitle: string;
   kind: "faculties" | "careers" | "points" | "rewards" | "challenges" | "badges";
   store: AdminStore;
-  setStore: (s: AdminStore) => void;
+  setStore: React.Dispatch<React.SetStateAction<AdminStore>>;
 }) {
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<AdminEntity | null>(null);
   const [notice, setNotice] = useState("");
   const [deleting, setDeleting] = useState<AdminEntity | null>(null);
   const [statusFilter, setStatusFilter] = useState("Todos");
+  const [mapKey, setMapKey] = useState(0);
+  const queryClient = useQueryClient();
 
 
-  const source = store[kind];
+
   const isAcademic = kind === "faculties" || kind === "careers";
-  const [careers, setCareers] = useState<AdminEntity[]>([]);
-  const [wasteTypes, setWasteTypes] = useState<
-    { id: number; nombre: string }[]
-  >([]);
 
-  useEffect(() => {
   const endpoints: Partial<Record<typeof kind, string>> = {
     rewards: "/api/admin/recompensas/",
     challenges: "/api/admin/retos/",
     badges: "/api/admin/insignias/",
+    points: "/api/admin/puntos-reciclaje/",
   };
 
   const endpoint = endpoints[kind];
 
-  if (!endpoint) return;
-
-  const cargarDatos = async () => {
-    try {
-      const response = await fetch(endpoint, {
+  const {
+    data: loadedRecords = [],
+    error: recordsError,
+  } = useQuery<AdminEntity[], Error>({
+    queryKey: ["admin", kind],
+    enabled: Boolean(endpoint),
+    queryFn: async () => {
+      const response = await fetch(endpoint!, {
         method: "GET",
         credentials: "include",
         headers: {
@@ -4331,134 +4674,181 @@ function AdminEntities({
 
       const data = await response.json();
 
-      const registros: AdminEntity[] = data.map((item: any) => {
+      return data.map((item: any): AdminEntity => {
+        if (kind === "points") {
+          return {
+            id: String(item.id),
+            name: item.nombre,
+            description: item.descripcion || "",
+            location: item.ubicacion,
+            accepted: item.residuos_aceptados || "",
+            active: item.activo,
+            latitud: item.latitud !== null ? Number(item.latitud) : null,
+            longitud: item.longitud !== null ? Number(item.longitud) : null,
+            qrCode: item.codigo_qr,
+          };
+        }
+
         if (kind === "rewards") {
-  return {
-    id: String(item.id),
-    name: item.nombre,
-    description: item.descripcion || "",
-    active: item.activa,
-    cost: item.costo_ecucoins,
-    stock: item.cantidad_disponible,
-    redeemed: item.canjes_realizados,
-    imageUrl: item.imagen || "",
-  };
-}
+          return {
+            id: String(item.id),
+            name: item.nombre,
+            description: item.descripcion || "",
+            active: item.activa,
+            cost: item.costo_ecucoins,
+            stock: item.cantidad_disponible,
+            redeemed: item.canjes_realizados,
+            imageUrl: item.imagen || "",
+          };
+        }
 
+        if (kind === "challenges") {
+          return {
+            id: String(item.id),
+            name: item.titulo,
+            description: item.descripcion || "",
+            objective: item.descripcion || "",
+            active: item.activo,
+            modality: item.modalidad || "INDIVIDUAL",
+            scope: item.alcance || undefined,
+            careerId: item.carrera ? Number(item.carrera) : undefined,
+            facultyId: item.facultad ? Number(item.facultad) : undefined,
+            goalType: item.tipo_objetivo || "RECICLAJES",
+            goal: item.meta ?? 1,
+            wasteTypeId: item.tipo_residuo
+              ? Number(item.tipo_residuo)
+              : undefined,
+            reward: item.recompensa_puntos ?? 0,
+            startDate: toLocalDateTime(item.fecha_inicio),
+            endDate: toLocalDateTime(item.fecha_fin),
+            participants: item.participantes ?? 0,
+            completed: item.completados ?? 0,
+          };
+        }
 
-      if (kind === "challenges") {
         return {
           id: String(item.id),
-          name: item.titulo,
+          name: item.nombre,
           description: item.descripcion || "",
-          objective: item.descripcion || "",
           active: item.activo,
-
-          modality: item.modalidad || "INDIVIDUAL",
-          scope: item.alcance || undefined,
-
-          careerId: item.carrera
-            ? Number(item.carrera)
-            : undefined,
-
-          facultyId: item.facultad
-            ? Number(item.facultad)
-            : undefined,
-
-          goalType: item.tipo_objetivo || "RECICLAJES",
-          goal: item.meta ?? 1,
-
-          wasteTypeId: item.tipo_residuo
-            ? Number(item.tipo_residuo)
-            : undefined,
-
-          reward: item.recompensa_puntos ?? 0,
-
-          startDate: item.fecha_inicio
-            ? item.fecha_inicio.slice(0, 16)
-            : "",
-
-          endDate: item.fecha_fin
-            ? item.fecha_fin.slice(0, 16)
-            : "",
-
-          participants: item.participantes ?? 0,
-          completed: item.completados ?? 0,
+          condition: `Alcanzar ${item.puntos_requeridos} puntos`,
+          obtained: item.obtenidas,
+          imageUrl: item.imagen || "",
         };
-      }
-
-
-        return {
-  id: String(item.id),
-  name: item.nombre,
-  description: item.descripcion || "",
-  active: item.activo,
-  condition: `Alcanzar ${item.puntos_requeridos} puntos`,
-  obtained: item.obtenidas,
-  imageUrl: item.imagen || "",
-};
       });
+    },
+  });
 
-      setStore((previous) => ({
-        ...previous,
-        [kind]: registros,
-      }));
-    } catch (error) {
-      console.error("Error al cargar los registros:", error);
-      setNotice("No se pudieron cargar los datos desde Django.");
-    }
-  };
+  const source = endpoint ? loadedRecords : store[kind];
 
-  cargarDatos();
-}, [kind]);
+
+const invalidarDatos = async () => {
+  await queryClient.invalidateQueries({
+    queryKey: ["admin", kind],
+  });
+
+  if (kind === "rewards") {
+    await queryClient.invalidateQueries({ queryKey: ["recompensas"] });
+  }
+
+  if (kind === "challenges") {
+    await queryClient.invalidateQueries({ queryKey: ["retos"] });
+  }
+
+  if (kind === "badges") {
+    await queryClient.invalidateQueries({ queryKey: ["insignias-disponibles"] });
+    await queryClient.invalidateQueries({ queryKey: ["mis-logros"] });
+  }
+
+  if (kind === "points") {
+    await queryClient.invalidateQueries({ queryKey: ["puntos-reciclaje"] });
+  }
+
+  if (kind === "careers") {
+    await queryClient.invalidateQueries({ queryKey: ["admin", "carreras"] });
+  }
+
+  if (kind === "faculties") {
+    await queryClient.invalidateQueries({ queryKey: ["admin", "facultades"] });
+  }
+  await queryClient.invalidateQueries({
+  queryKey: ["admin", "reportes"],
+});
+
+await queryClient.invalidateQueries({
+  queryKey: ["admin", "dashboard"],
+});
+
+if (kind === "points") {
+  await queryClient.invalidateQueries({
+    queryKey: ["admin", "puntos-reciclaje"],
+  });
+}
+
+if (kind === "faculties" || kind === "careers") {
+  await queryClient.invalidateQueries({
+    queryKey: ["admin", "estructura-academica"],
+  });
+}
+
+};
 
 
   useEffect(() => {
-      const cargarOpcionesRetos = async () => {
-        try {
-          const [carrerasResponse, residuosResponse] = await Promise.all([
-            fetch("/api/admin/carreras/", {
-              credentials: "include",
-              headers: { Accept: "application/json" },
-            }),
-            fetch("/api/residuos/", {
-              credentials: "include",
-              headers: { Accept: "application/json" },
-            }),
-          ]);
+    if (recordsError) {
+      console.error("Error al cargar los registros:", recordsError);
+      setNotice("No se pudieron cargar los datos desde Django.");
+    }
+  }, [recordsError]);
 
-          if (!carrerasResponse.ok || !residuosResponse.ok) {
-            throw new Error("No se pudieron cargar las opciones de los retos.");
-          }
 
-          const carrerasData = await carrerasResponse.json();
-          const residuosData = await residuosResponse.json();
+const { data: careers = [] } = useQuery<AdminEntity[]>({
+  queryKey: ["admin", "carreras"],
+  queryFn: async () => {
+    const response = await fetch("/api/admin/carreras/", {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
 
-          setCareers(
-            carrerasData.map((item: any) => ({
-              id: String(item.id),
-              name: item.name,
-              description: item.description || "",
-              active: item.active,
-              faculty: item.faculty,
-              facultyId: Number(item.faculty_id),
-            }))
-          );
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar las carreras.");
+    }
 
-          setWasteTypes(
-            residuosData.map((item: any) => ({
-              id: Number(item.id),
-              nombre: item.nombre,
-            }))
-          );
-        } catch (error) {
-          console.error("Error al cargar opciones de retos:", error);
-          setNotice("No se pudieron cargar las carreras o los tipos de residuos.");
-        }
-      };
+    const data = await response.json();
 
-      cargarOpcionesRetos();
-    }, []);
+    return data.map((item: any) => ({
+      id: String(item.id),
+      name: item.name,
+      description: item.description || "",
+      active: item.active,
+      faculty: item.faculty,
+      facultyId: Number(item.faculty_id),
+    }));
+  },
+});
+
+const { data: wasteTypes = [] } = useQuery<
+  { id: number; nombre: string }[]
+>({
+  queryKey: ["residuos"],
+  queryFn: async () => {
+    const response = await fetch("/api/residuos/", {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar los tipos de residuos.");
+    }
+
+    const data = await response.json();
+
+    return data.map((item: any) => ({
+      id: Number(item.id),
+      nombre: item.nombre,
+    }));
+  },
+});
 
 
   const icon: IconName =
@@ -4529,6 +4919,9 @@ function AdminEntities({
             : [...previousStore.faculties, updatedItem],
         }));
 
+        setMapKey((previous) => previous + 1);
+
+        await invalidarDatos();
         setEditing(null);
         setNotice("Facultad guardada correctamente.");
         return;
@@ -4596,6 +4989,7 @@ function AdminEntities({
             : [...previousStore.careers, updatedItem],
         }));
 
+        await invalidarDatos();
         setEditing(null);
         setNotice("Carrera guardada correctamente.");
         return;
@@ -4714,12 +5108,8 @@ function AdminEntities({
           wasteTypeId: saved.tipo_residuo ?? undefined,
           wasteType: item.wasteType,
           reward: saved.recompensa_puntos,
-          startDate: saved.fecha_inicio
-            ? saved.fecha_inicio.slice(0, 16)
-            : "",
-          endDate: saved.fecha_fin
-            ? saved.fecha_fin.slice(0, 16)
-            : "",
+          startDate: toLocalDateTime(saved.fecha_inicio),
+          endDate: toLocalDateTime(saved.fecha_fin),
           participants: saved.participantes,
           completed: saved.completados,
         };
@@ -4733,6 +5123,7 @@ function AdminEntities({
             : [...previousStore.challenges, updatedItem],
         }));
 
+        await invalidarDatos();
         setEditing(null);
         setNotice("Reto guardado correctamente.");
         return;
@@ -4809,6 +5200,7 @@ if (kind === "rewards") {
         : [...previousStore.rewards, updatedItem],
     }));
 
+    await invalidarDatos();
     setEditing(null);
     setNotice("Recompensa guardada correctamente.");
     return;
@@ -4871,6 +5263,7 @@ if (kind === "badges") {
   id: String(saved.id),
   name: saved.nombre,
   description: saved.descripcion || "",
+      accepted: saved.residuos_aceptados || "",
   active: saved.activo,
   condition: `Alcanzar ${saved.puntos_requeridos} puntos`,
   obtained: saved.obtenidas,
@@ -4886,6 +5279,7 @@ if (kind === "badges") {
         : [...previousStore.badges, updatedItem],
     }));
 
+    await invalidarDatos();
     setEditing(null);
     setNotice("Insignia guardada correctamente.");
     return;
@@ -4897,6 +5291,83 @@ if (kind === "badges") {
 }
 
 
+    // Guardado de puntos de reciclaje en Django
+if (kind === "points") {
+  try {
+    const previous = source.find((x) => x.id === item.id);
+
+    const csrfToken = document.cookie
+      .split("; ")
+      .find((cookie) => cookie.startsWith("csrftoken="))
+      ?.split("=")[1];
+
+    const response = await fetch(
+      previous
+        ? `/api/admin/puntos-reciclaje/${item.id}/`
+        : "/api/admin/puntos-reciclaje/",
+      {
+        method: previous ? "PATCH" : "POST",
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken || "",
+        },
+        body: JSON.stringify({
+          nombre: item.name,
+          ubicacion: item.location || "",
+          descripcion: item.description || "",
+          residuos_aceptados: item.accepted || "",
+          codigo_qr: previous?.qrCode || crypto.randomUUID(),
+          activo: item.active,
+          latitud:
+  item.latitud != null
+    ? Number(item.latitud.toFixed(7))
+    : null,
+longitud:
+  item.longitud != null
+    ? Number(item.longitud.toFixed(7))
+    : null,
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    const saved = await response.json();
+
+    const updatedItem: AdminEntity = {
+      ...item,
+      id: String(saved.id),
+      name: saved.nombre,
+      location: saved.ubicacion,
+      active: saved.activo,
+      latitud: saved.latitud,
+      longitud: saved.longitud,
+      qrCode: saved.codigo_qr,
+    };
+
+    setStore((previousStore) => ({
+      ...previousStore,
+      points: previous
+        ? previousStore.points.map((point) =>
+            point.id === item.id ? updatedItem : point
+          )
+        : [...previousStore.points, updatedItem],
+    }));
+
+    await invalidarDatos();
+    setEditing(null);
+    setNotice("Punto de reciclaje guardado correctamente.");
+    return;
+  } catch (error) {
+    console.error("Error al guardar el punto de reciclaje:", error);
+    setNotice("No se pudo guardar el punto de reciclaje. Revisa la consola.");
+    return;
+  }
+}
 
     // Conservamos el comportamiento anterior para las demás secciones.
     const previous = source.find((x) => x.id === item.id);
@@ -4942,7 +5413,8 @@ if (kind === "badges") {
   kind === "careers" ||
   kind === "badges" ||
   kind === "rewards" ||
-  kind === "challenges"
+  kind === "challenges" ||
+  kind === "points"
 ) {
       try {
         const item = source.find((x) => x.id === id);
@@ -4962,7 +5434,9 @@ if (kind === "badges") {
         ? `/api/admin/insignias/${id}/`
         : kind === "challenges"
           ? `/api/admin/retos/${id}/`
-          : `/api/admin/recompensas/${id}/`;
+          : kind === "points"
+            ? `/api/admin/puntos-reciclaje/${id}/`
+            : `/api/admin/recompensas/${id}/`;
 
         const response = await fetch(endpoint, {
           method: "PATCH",
@@ -4975,7 +5449,9 @@ if (kind === "badges") {
           body: JSON.stringify(
   kind === "rewards"
     ? { activa: !item.active }
-    : kind === "badges" || kind === "challenges"
+    : kind === "badges" ||
+        kind === "challenges" ||
+        kind === "points"
       ? { activo: !item.active }
       : { active: !item.active }
 ),
@@ -4996,7 +5472,9 @@ if (kind === "badges") {
     active:
   kind === "rewards"
     ? updated.activa
-    : kind === "badges" || kind === "challenges"
+    : kind === "badges" ||
+        kind === "challenges" ||
+        kind === "points"
       ? updated.activo
       : updated.active,
   }
@@ -5004,6 +5482,7 @@ if (kind === "badges") {
           ),
         }));
 
+        await invalidarDatos();
         setNotice("Estado actualizado correctamente.");
         return;
       } catch (error) {
@@ -5026,11 +5505,10 @@ if (kind === "badges") {
 
   const remove = (item: AdminEntity) => {
     const hasRelations =
-      kind === "faculties"
-        ? store.careers.some((c) => c.faculty === item.name) ||
-          store.users.some((u) => u.faculty === item.name)
-        : kind === "careers"
-          ? store.users.some((u) => u.career === item.name)
+  kind === "faculties"
+    ? false
+    : kind === "careers"
+      ? false
           : kind === "points"
             ? store.recyclings.some((r) => r.point === item.name)
             : false;
@@ -5052,7 +5530,8 @@ if (kind === "badges") {
   kind === "careers" ||
   kind === "badges" ||
   kind === "rewards" ||
-  kind === "challenges"
+  kind === "challenges" ||
+  kind === "points"
 ) {
       try {
         const csrfToken = document.cookie
@@ -5069,7 +5548,9 @@ if (kind === "badges") {
         ? `/api/admin/insignias/${deleting.id}/`
         : kind === "rewards"
           ? `/api/admin/recompensas/${deleting.id}/`
-          : `/api/admin/retos/${deleting.id}/`;
+          : kind === "points"
+            ? `/api/admin/puntos-reciclaje/${deleting.id}/`
+            : `/api/admin/retos/${deleting.id}/`;
 
         const response = await fetch(endpoint, {
           method: "DELETE",
@@ -5090,6 +5571,7 @@ if (kind === "badges") {
           ),
         }));
 
+        await invalidarDatos();
         setDeleting(null);
         setNotice(
   kind === "faculties"
@@ -5194,6 +5676,7 @@ if (kind === "badges") {
         </select>
       </AdminSearch>
 
+
       {isAcademic ? (
         <section className="card table-card">
           <table>
@@ -5267,9 +5750,8 @@ if (kind === "badges") {
             </tbody>
           </table>
         </section>
-      ) : (
-        <div
-  className="management-grid"
+      ) :  (
+  <div className="management-grid"
   style={{ alignItems: "start" }}
 >
           {visible.map((item) => (
@@ -5389,6 +5871,7 @@ if (kind === "badges") {
         </div>
       )}
 
+
       {editing && (
   <AdminForm
     title={
@@ -5427,68 +5910,57 @@ function AdminUsers({store}:{store:AdminStore}) {
   const [faculty, setFaculty] = useState("Todas");
   const [selected, setSelected] = useState<AdminUser | null>(null);
 
-  const [usuariosAPI, setUsuariosAPI] = useState<AdminUser[]>([]);
-  const [cargandoUsuarios, setCargandoUsuarios] = useState(true);
-  const [errorUsuarios, setErrorUsuarios] = useState("");
 
-  useEffect(() => {
-    let activo = true;
-
-    fetch("/api/admin/usuarios/", {
+const {
+  data: usuarios = [],
+  isLoading: cargandoUsuarios,
+  error: errorConsultaUsuarios,
+  refetch: recargarUsuarios,
+} = useQuery<AdminUser[], Error>({
+  queryKey: ["admin", "usuarios"],
+  refetchOnMount: "always",
+  queryFn: async () => {
+    const respuesta = await fetch("/api/admin/usuarios/", {
       method: "GET",
       credentials: "include",
       headers: {
         Accept: "application/json",
       },
-    })
-      .then(async (respuesta) => {
-        if (!respuesta.ok) {
-          throw new Error(
-            respuesta.status === 403
-              ? "No tienes permisos de administrador o tu sesión ha expirado."
-              : `Error al consultar usuarios (${respuesta.status}).`
-          );
-        }
+    });
 
-        return respuesta.json();
-      })
-      .then((datos) => {
-        if (!activo) return;
+    if (!respuesta.ok) {
+      throw new Error(
+        respuesta.status === 403
+          ? "No tienes permisos de administrador o tu sesión ha expirado."
+          : `Error al consultar usuarios (${respuesta.status}).`
+      );
+    }
 
-        const usuarios = (datos.usuarios ?? []).map((u: any): AdminUser => ({
-          id: String(u.id),
-          identification: u.identificacion ?? "",
-          name: u.nombre,
-          email: u.correo,
-          code: u.codigo_qr,
-          faculty: u.facultad,
-          career: u.carrera,
-          course: `${u.semestre}.º semestre`,
-          points: u.puntos,
-          level: calcularNivel(u.puntos),
-          recyclings: u.total_reciclajes,
-          active: u.activo,
-          badges: [],
-          challenges: [],
-          fechaRegistro: u.fecha_registro,
-          historial: u.historial ?? [],
-        }));
+    const datos = await respuesta.json();
 
+    return (datos.usuarios ?? []).map((u: any): AdminUser => ({
+      id: String(u.id),
+      identification: u.identificacion ?? "",
+      name: u.nombre,
+      email: u.correo,
+      code: u.codigo_qr,
+      faculty: u.facultad,
+      career: u.carrera,
+      course: `${u.semestre}.º semestre`,
+      points: u.puntos,
+      level: calcularNivel(u.puntos),
+      recyclings: u.total_reciclajes,
+      active: u.activo,
+      badges: [],
+      challenges: [],
+      fechaRegistro: u.fecha_registro,
+      historial: u.historial ?? [],
+    }));
+  },
+});
 
-        setUsuariosAPI(usuarios);
-      })
-      .catch((error: Error) => {
-        if (activo) setErrorUsuarios(error.message);
-      })
-      .finally(() => {
-        if (activo) setCargandoUsuarios(false);
-      });
+const errorUsuarios = errorConsultaUsuarios?.message ?? "";
 
-    return () => {
-      activo = false;
-    };
-  }, []);
-  const usuarios = usuariosAPI;
 
   const filasFiltradas = usuarios.filter(
       (u) =>
@@ -5521,11 +5993,11 @@ function AdminUsers({store}:{store:AdminStore}) {
           />
           <p>{errorUsuarios}</p>
           <Button
-              variant="ghost"
-              onClick={() => window.location.reload()}
-          >
-            Volver a intentar
-          </Button>
+  variant="ghost"
+  onClick={() => recargarUsuarios()}
+>
+  Volver a intentar
+</Button>
         </>
     );
   }
@@ -5577,29 +6049,31 @@ function AdminRecyclings({ store }: { store: AdminStore }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("Todos");
   const [selected, setSelected] = useState<AdminRecyclingAPI | null>(null);
-  const [recyclings, setRecyclings] = useState<AdminRecyclingAPI[]>([]);
 
-  useEffect(() => {
-    const cargarReciclajes = async () => {
-      try {
-        const response = await fetch(
-          "/api/admin/reciclajes/",
-          { credentials: "include" }
-        );
+const {
+  data: recyclings = [],
+  isLoading: cargandoReciclajes,
+  error: errorReciclajes,
+  refetch: recargarReciclajes,
+} = useQuery<AdminRecyclingAPI[], Error>({
+  queryKey: ["admin", "reciclajes"],
+  refetchOnMount: "always",
+  queryFn: async () => {
+    const response = await fetch("/api/admin/reciclajes/", {
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
 
-        if (!response.ok) {
-          throw new Error("No se pudieron cargar los reciclajes.");
-        }
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar los reciclajes.");
+    }
 
-        const data: AdminRecyclingAPI[] = await response.json();
-        setRecyclings(data);
-      } catch (error) {
-        console.error("Error al cargar reciclajes:", error);
-      }
-    };
+    return response.json();
+  },
+});
 
-    cargarReciclajes();
-  }, []);
 
   const traducirEstado = (estado: string) => {
     const estados: Record<string, string> = {
@@ -5610,6 +6084,33 @@ function AdminRecyclings({ store }: { store: AdminStore }) {
 
     return estados[estado] || estado;
   };
+
+  if (cargandoReciclajes) {
+  return (
+    <>
+      <PageHeader
+        title="Reciclajes"
+        subtitle="Consultando los registros de reciclaje..."
+      />
+      <p>Cargando reciclajes...</p>
+    </>
+  );
+}
+
+if (errorReciclajes) {
+  return (
+    <>
+      <PageHeader
+        title="Reciclajes"
+        subtitle="No se pudieron consultar los registros."
+      />
+      <p>{errorReciclajes.message}</p>
+      <Button variant="ghost" onClick={() => recargarReciclajes()}>
+        Volver a intentar
+      </Button>
+    </>
+  );
+}
 
   const rows = recyclings.filter((r) => {
     return (
@@ -5731,59 +6232,52 @@ function AdminRecyclings({ store }: { store: AdminStore }) {
 
 function AdminRanking({ store }: { store: AdminStore }) {
   const [type, setType] = useState<RankingType>("Estudiantes");
-  const [usuariosAPI, setUsuariosAPI] = useState<AdminUser[]>([]);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState("");
 
-  useEffect(() => {
-    let activo = true;
-
-    fetch("/api/admin/usuarios/", {
+const {
+  data: usuariosAPI = [],
+  isLoading: cargando,
+  error: errorConsulta,
+  refetch: recargarRanking,
+} = useQuery<AdminUser[], Error>({
+  queryKey: ["admin", "usuarios"],
+  queryFn: async () => {
+    const respuesta = await fetch("/api/admin/usuarios/", {
       method: "GET",
       credentials: "include",
       headers: { Accept: "application/json" },
-    })
-      .then(async (respuesta) => {
-        if (!respuesta.ok) {
-          throw new Error(`No se pudieron cargar los usuarios (${respuesta.status}).`);
-        }
-        return respuesta.json();
-      })
-      .then((datos) => {
-        if (!activo) return;
+    });
 
-        const usuarios = (datos.usuarios ?? []).map((u: any): AdminUser => ({
-          id: String(u.id),
-          identification: u.identificacion ?? "",
-          name: u.nombre,
-          email: u.correo,
-          code: u.codigo_qr,
-          faculty: u.facultad,
-          career: u.carrera,
-          course: `${u.semestre}.º semestre`,
-          points: u.puntos,
-          level: calcularNivel(u.puntos),
-          recyclings: u.total_reciclajes,
-          active: u.activo,
-          badges: [],
-          challenges: [],
-          fechaRegistro: u.fecha_registro,
-          historial: u.historial ?? [],
-        }));
+    if (!respuesta.ok) {
+      throw new Error(
+        `No se pudieron cargar los usuarios (${respuesta.status}).`
+      );
+    }
 
-        setUsuariosAPI(usuarios);
-      })
-      .catch((err: Error) => {
-        if (activo) setError(err.message);
-      })
-      .finally(() => {
-        if (activo) setCargando(false);
-      });
+    const datos = await respuesta.json();
 
-    return () => {
-      activo = false;
-    };
-  }, []);
+    return (datos.usuarios ?? []).map((u: any): AdminUser => ({
+      id: String(u.id),
+      identification: u.identificacion ?? "",
+      name: u.nombre,
+      email: u.correo,
+      code: u.codigo_qr,
+      faculty: u.facultad,
+      career: u.carrera,
+      course: `${u.semestre}.º semestre`,
+      points: u.puntos,
+      level: calcularNivel(u.puntos),
+      recyclings: u.total_reciclajes,
+      active: u.activo,
+      badges: [],
+      challenges: [],
+      fechaRegistro: u.fecha_registro,
+      historial: u.historial ?? [],
+    }));
+  },
+});
+
+const error = errorConsulta?.message ?? "";
+
 
   const users = [...usuariosAPI].sort((a, b) => b.points - a.points);
 
@@ -5835,8 +6329,16 @@ function AdminRanking({ store }: { store: AdminStore }) {
       {cargando ? (
         <p>Cargando ranking...</p>
       ) : error ? (
-        <p>{error}</p>
-      ) : (
+  <>
+    <p>{error}</p>
+    <Button
+      variant="ghost"
+      onClick={() => recargarRanking()}
+    >
+      Volver a intentar
+    </Button>
+  </>
+) : (
         <section className="card table-card">
           <table>
             <thead>
@@ -5904,49 +6406,74 @@ function AdminRanking({ store }: { store: AdminStore }) {
 function AdminDashboardV2({store,setPage}:{store:AdminStore;setPage:(p:string)=>void}){
 
   const [notice, setNotice] = useState("");
-  const [dashboard, setDashboard] = useState<{
-    usuarios_registrados: number;
-    usuarios_activos: number;
-    total_reciclajes: number;
-    puntos_generados: number;
-    facultades: {
-      facultad: string;
-      puntos: number;
-      estudiantes: number;
-    }[];
-  } | null>(null);
-  const [cargandoDashboard, setCargandoDashboard] = useState(true);
-  const [errorDashboard, setErrorDashboard] = useState("");
 
-  useEffect(() => {
-    let activo = true;
-
-    fetch("/api/admin/dashboard/", {
+const {
+  data: dashboard,
+  isLoading: cargandoDashboard,
+  error: errorConsultaDashboard,
+  refetch: recargarDashboard,
+} = useQuery<{
+  usuarios_registrados: number;
+  usuarios_activos: number;
+  total_reciclajes: number;
+  puntos_generados: number;
+  facultades: {
+    facultad: string;
+    puntos: number;
+    estudiantes: number;
+  }[];
+}, Error>({
+  queryKey: ["admin", "dashboard"],
+  queryFn: async () => {
+    const respuesta = await fetch("/api/admin/dashboard/", {
       credentials: "include",
       headers: { Accept: "application/json" },
-    })
-      .then(async (respuesta) => {
-        if (!respuesta.ok) {
-          throw new Error(`Error al cargar el Dashboard (${respuesta.status}).`);
-        }
-        return respuesta.json();
-      })
-      .then((datos) => {
-        if (activo) setDashboard(datos);
-      })
-      .catch((error: Error) => {
-        if (activo) setErrorDashboard(error.message);
-      })
-      .finally(() => {
-        if (activo) setCargandoDashboard(false);
-      });
+    });
 
-    return () => {
-      activo = false;
-    };
-  }, []);
+    if (!respuesta.ok) {
+      throw new Error(
+        `Error al cargar el Dashboard (${respuesta.status}).`
+      );
+    }
+
+    return respuesta.json();
+  },
+});
+
+const errorDashboard = errorConsultaDashboard?.message ?? "";
+
 
   const total = dashboard?.puntos_generados ?? 0;
+
+  if (cargandoDashboard) {
+  return (
+    <>
+      <PageHeader
+        title="Panel de Gestión Ambiental"
+        subtitle="Consultando las estadísticas de EcoCampus AI..."
+      />
+      <p>Cargando estadísticas...</p>
+    </>
+  );
+}
+
+if (errorDashboard) {
+  return (
+    <>
+      <PageHeader
+        title="Panel de Gestión Ambiental"
+        subtitle="No se pudieron cargar las estadísticas."
+      />
+      <p>{errorDashboard}</p>
+      <Button
+        variant="ghost"
+        onClick={() => recargarDashboard()}
+      >
+        Volver a intentar
+      </Button>
+    </>
+  );
+}
 
  return <><PageHeader title="Panel de Gestión Ambiental" subtitle="Resumen conectado de EcoCampus AI" action={<Button variant="secondary" icon="download" onClick={()=>setNotice("Exportación simulada del resumen.")}>Exportar resumen</Button>}/><AdminNotice text={notice}/><div className="admin-stats"><StatCard
   icon="users"
@@ -5989,50 +6516,60 @@ function AdminReportsV2({ store }: { store: AdminStore }) {
   const [period, setPeriod] = useState("Este mes");
   const [generated, setGenerated] = useState(false);
   const [notice, setNotice] = useState("");
-  const [reportData, setReportData] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const [facultyId, setFacultyId] = useState("");
 
-  const generarReporte = async () => {
-    setLoading(true);
-    setNotice("");
+const [facultyId, setFacultyId] = useState("");
 
-    try {
-      const params = new URLSearchParams({
-        tipo: report,
-        periodo: period,
-      });
+const {
+  data: reportData,
+  isFetching: loading,
+  refetch: consultarReporte,
+} = useQuery<any, Error>({
+  queryKey: ["admin", "reportes", report, period, facultyId],
+  enabled: false,
+  queryFn: async () => {
+    const params = new URLSearchParams({
+      tipo: report,
+      periodo: period,
+    });
 
-      if (facultyId) {
-        params.set("facultad_id", facultyId);
-      }
-
-      const response = await fetch(
-        `/api/admin/reportes/?${params.toString()}`,
-        {
-          method: "GET",
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`Error al generar el reporte: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      setReportData(data);
-      setGenerated(true);
-    } catch (error) {
-      console.error(error);
-      setNotice(
-        "No se pudo generar el reporte. Verifica la conexión con Django."
-      );
-    } finally {
-      setLoading(false);
+    if (facultyId) {
+      params.set("facultad_id", facultyId);
     }
-  };
+
+    const response = await fetch(
+      `/api/admin/reportes/?${params.toString()}`,
+      {
+        method: "GET",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Error al generar el reporte: ${response.status}`
+      );
+    }
+
+    return response.json();
+  },
+});
+
+const generarReporte = async () => {
+  setNotice("");
+
+  try {
+    await consultarReporte({ throwOnError: true });
+    setGenerated(true);
+  } catch (error) {
+    console.error(error);
+    setGenerated(false);
+    setNotice(
+      "No se pudo generar el reporte. Verifica la conexión con Django."
+    );
+  }
+};
+
 
   const exportarExcel = async () => {
   setNotice("");
@@ -6278,7 +6815,7 @@ function AdminReportsV2({ store }: { store: AdminStore }) {
               onChange={(e) => {
                 setReport(e.target.value);
                 setGenerated(false);
-                setReportData(null);
+
               }}
             >
               {[
@@ -6303,7 +6840,7 @@ function AdminReportsV2({ store }: { store: AdminStore }) {
               onChange={(e) => {
                 setPeriod(e.target.value);
                 setGenerated(false);
-                setReportData(null);
+
               }}
             >
               <option>Esta semana</option>
@@ -6320,7 +6857,7 @@ function AdminReportsV2({ store }: { store: AdminStore }) {
               onChange={(e) => {
                 setFacultyId(e.target.value);
                 setGenerated(false);
-                setReportData(null);
+
               }}
             >
               <option value="">Todas las facultades</option>
@@ -6422,70 +6959,75 @@ function AdminConfigV2({
   store: AdminStore;
   setStore: (s: AdminStore) => void
 }) {
+
+  const queryClient = useQueryClient();
   const [notice, setNotice] = useState("");
   const [notifications, setNotifications] = useState(true);
   const [confirming, setConfirming] = useState(false);
 
-  const [puntos, setPuntos] = useState("5");
   const [nuevoValor, setNuevoValor] = useState("5");
 
-  const [editorAbierto, setEditorAbierto] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+const [editorAbierto, setEditorAbierto] = useState(false);
+const [saving, setSaving] = useState(false);
 
-  // Obtener el token CSRF de Django
-  const obtenerCSRF = () => {
-    const cookies = document.cookie.split(";");
+const {
+  data: configuracion,
+  isLoading: loading,
+  refetch: cargarConfiguracion,
+} = useQuery<{ puntos_por_ecucoin: number }, Error>({
+  queryKey: ["admin", "configuracion"],
+  refetchOnMount: "always",
+  queryFn: async () => {
+    const response = await fetch("/api/admin/configuracion/", {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
 
-    const csrfCookie = cookies.find(cookie =>
-      cookie.trim().startsWith("csrftoken=")
-    );
-
-    return csrfCookie
-      ? decodeURIComponent(csrfCookie.split("=")[1])
-      : "";
-  };
-
-  // Consultar la conversión guardada en SQL Server
-  const cargarConfiguracion = async () => {
-    setLoading(true);
-
-    try {
-      const response = await fetch("/api/admin/configuracion/", {
-        method: "GET",
-        credentials: "include",
-        headers: {
-          Accept: "application/json"
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error("No se pudo consultar la configuración.");
-      }
-
-      const data = await response.json();
-
-      setPuntos(String(data.puntos_por_ecucoin));
-      setNuevoValor(String(data.puntos_por_ecucoin));
-
-    } catch (error) {
-      console.error(error);
-      setNotice("No se pudo cargar la regla de conversión.");
-    } finally {
-      setLoading(false);
+    if (!response.ok) {
+      throw new Error("No se pudo consultar la configuración.");
     }
-  };
 
-  useEffect(() => {
-  cargarConfiguracion();
-}, []);
+    return response.json();
+  },
+});
 
-  // Abrir editor y consultar el valor actual
-  const abrirEditor = async () => {
-    setNotice("");
-    await cargarConfiguracion();
+const puntos = String(configuracion?.puntos_por_ecucoin ?? 5);
+
+// Obtener el token CSRF de Django
+const obtenerCSRF = () => {
+  const cookies = document.cookie.split(";");
+
+  const csrfCookie = cookies.find(cookie =>
+    cookie.trim().startsWith("csrftoken=")
+  );
+
+  return csrfCookie
+    ? decodeURIComponent(csrfCookie.split("=")[1])
+    : "";
+};
+
+// Abrir editor y consultar el valor actual
+const abrirEditor = async () => {
+  setNotice("");
+
+  try {
+    const resultado = await cargarConfiguracion();
+
+    if (resultado.data) {
+      setNuevoValor(
+        String(resultado.data.puntos_por_ecucoin)
+      );
+    }
+
     setEditorAbierto(true);
-  };
+  } catch (error) {
+    console.error(error);
+    setNotice("No se pudo cargar la regla de conversión.");
+  }
+};
 
   // Guardar nueva equivalencia
   const guardarConversion = async () => {
@@ -6525,10 +7067,23 @@ function AdminConfigV2({
         );
       }
 
-      setPuntos(String(data.puntos_por_ecucoin));
       setNuevoValor(String(data.puntos_por_ecucoin));
-      setEditorAbierto(false);
-      setNotice("La regla de conversión se actualizó correctamente.");
+
+queryClient.setQueryData(
+  ["admin", "configuracion"],
+  data
+);
+
+await queryClient.invalidateQueries({
+  queryKey: ["perfil"],
+});
+
+await queryClient.invalidateQueries({
+  queryKey: ["mis-recompensas"],
+});
+
+setEditorAbierto(false);
+setNotice("La regla de conversión se actualizó correctamente.");
 
     } catch (error) {
       console.error(error);
@@ -6746,68 +7301,71 @@ function AdminConfigV2({
 
 function AdminConsole({page,setPage}:{page:string;setPage:(p:string)=>void}){
  const [store,setStore]=useState<AdminStore>(createAdminStore);
-  useEffect(() => {
-   const cargarEstructuraAcademica = async () => {
-     try {
-       const [respuestaFacultades, respuestaCarreras] = await Promise.all([
-         fetch("/api/admin/facultades/", {
-           method: "GET",
-           credentials: "include",
-           headers: {
-             Accept: "application/json",
-           },
-         }),
-         fetch("/api/admin/carreras/", {
-           method: "GET",
-           credentials: "include",
-           headers: {
-             Accept: "application/json",
-           },
-         }),
-       ]);
 
-       if (!respuestaFacultades.ok || !respuestaCarreras.ok) {
-         throw new Error("No se pudieron cargar las facultades y carreras.");
-       }
+const { data: estructuraAcademica } = useQuery({
+  queryKey: ["admin", "estructura-academica"],
+  queryFn: async () => {
+    const [respuestaFacultades, respuestaCarreras] = await Promise.all([
+      fetch("/api/admin/facultades/", {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      }),
+      fetch("/api/admin/carreras/", {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      }),
+    ]);
 
-       const datosFacultades = await respuestaFacultades.json();
-       const datosCarreras = await respuestaCarreras.json();
+    if (!respuestaFacultades.ok || !respuestaCarreras.ok) {
+      throw new Error("No se pudieron cargar las facultades y carreras.");
+    }
 
-       setStore((anterior) => ({
-         ...anterior,
-         faculties: datosFacultades.map((f: any) => ({
-           id: String(f.id),
-           name: f.name,
-           description: f.description || "",
-           active: f.active,
-           total_carreras: f.total_carreras,
-           total_estudiantes: f.total_estudiantes,
-           points: f.points,
-         })),
-         careers: datosCarreras.map((c: any) => ({
-           id: String(c.id),
-           name: c.name,
-           description: c.description || "",
-           active: c.active,
-           faculty: c.faculty,
-           facultyId: c.faculty_id,
-           total_estudiantes: c.total_estudiantes,
-           points: c.points,
-         })),
-       }));
-     } catch (error) {
-       console.error("Error al cargar la estructura académica:", error);
-     }
-   };
+    const datosFacultades = await respuestaFacultades.json();
+    const datosCarreras = await respuestaCarreras.json();
 
-   cargarEstructuraAcademica();
- }, []);
+    return {
+      faculties: datosFacultades.map((f: any) => ({
+        id: String(f.id),
+        name: f.name,
+        description: f.description || "",
+        active: f.active,
+        total_carreras: f.total_carreras,
+        total_estudiantes: f.total_estudiantes,
+        points: f.points,
+      })),
+      careers: datosCarreras.map((c: any) => ({
+        id: String(c.id),
+        name: c.name,
+        description: c.description || "",
+        active: c.active,
+        faculty: c.faculty,
+        facultyId: c.faculty_id,
+        total_estudiantes: c.total_estudiantes,
+        points: c.points,
+      })),
+    };
+  },
+});
+
+useEffect(() => {
+  if (!estructuraAcademica) return;
+
+  setStore((anterior) => ({
+    ...anterior,
+    faculties: estructuraAcademica.faculties,
+    careers: estructuraAcademica.careers,
+  }));
+}, [estructuraAcademica]);
+
+
+
  if(page==="Dashboard")return <AdminDashboardV2 store={store} setPage={setPage}/>;
  if(page==="Usuarios")return <AdminUsers store={store}/>;
  if(page==="Facultades")return <AdminEntities title="Facultades" subtitle="Administra la estructura académica, sus carreras y estudiantes." kind="faculties" store={store} setStore={setStore}/>;
  if(page==="Carreras")return <AdminEntities title="Carreras" subtitle="Gestiona carreras y su relación obligatoria con una facultad." kind="careers" store={store} setStore={setStore}/>;
  if(page==="Reciclajes")return <AdminRecyclings store={store}/>;
  if(page==="Puntos de reciclaje")return <AdminEntities title="Puntos de reciclaje" subtitle="Gestiona ubicación, disponibilidad y residuos aceptados." kind="points" store={store} setStore={setStore}/>;
+ if(page==="Mapa de utilización")return <CampusMap admin={true}/>;
  if(page==="Ranking")return <AdminRanking store={store}/>;
  if(page==="Recompensas")return <AdminEntities title="Recompensas" subtitle="Crea y administra recompensas visibles para estudiantes." kind="rewards" store={store} setStore={setStore}/>;
  if(page==="Retos")return <AdminEntities title="Retos" subtitle="Define objetivos, períodos, puntos y participación." kind="challenges" store={store} setStore={setStore}/>;
@@ -6815,6 +7373,7 @@ function AdminConsole({page,setPage}:{page:string;setPage:(p:string)=>void}){
  if(page==="Reportes")return <AdminReportsV2 store={store}/>;
  return <AdminConfigV2 store={store} setStore={setStore}/>;
 }
+
 
 function AdminPage({page,setPage}:{page:string;setPage:(p:string)=>void}){
  return <AdminConsole page={page} setPage={setPage}/>;
@@ -6834,9 +7393,455 @@ async function obtenerPerfil(): Promise<PerfilEstudiante> {
 }
 
 
+function EstacionReciclaje() {
+  const {
+  data: puntos = [],
+  isLoading: cargando,
+  error: errorConsultaPuntos,
+} = useQuery<
+  { id: number; nombre: string; ubicacion: string; activo: boolean }[],
+  Error
+>({
+  queryKey: ["estacion", "puntos-reciclaje"],
+  queryFn: async () => {
+    const response = await fetch("/api/estacion/puntos-reciclaje/", {
+      credentials: "same-origin",
+    });
+
+    if (!response.ok) {
+      throw new Error("No se pudieron cargar los puntos.");
+    }
+
+    return response.json();
+  },
+});
+
+const error = errorConsultaPuntos?.message ?? "";
+  const [errorCamara, setErrorCamara] = useState("");
+  const [cameraActiva, setCameraActiva] = useState(false);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const [qrLeido, setQrLeido] = useState("");
+  const [estudianteIdentificado, setEstudianteIdentificado] = useState<{
+  nombre: string;
+  facultad: string;
+  carrera: string;
+} | null>(null);
+  const [estadoEstacion, setEstadoEstacion] = useState<
+  | "ESPERANDO_QR"
+  | "IDENTIFICANDO"
+  | "DETECTANDO"
+  | "VERIFICANDO_DEPOSITO"
+  | "REGISTRANDO"
+  | "FINALIZADO"
+>("ESPERANDO_QR");
+  const [reiniciarLectorQR, setReiniciarLectorQR] = useState(0);
+
+  const [detecciones, setDetecciones] = useState<
+  {
+    clase: string;
+    confianza: number;
+    coordenadas: number[];
+  }[]
+>([]);
+
+  const [procesandoDeteccion, setProcesandoDeteccion] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const controlesQRRef = useRef<{ stop: () => void } | null>(null);
+
+  useEffect(() => {
+  let cancelado = false;
+
+  async function iniciarLectorQR() {
+    const video = videoRef.current;
+
+    if (!cameraActiva || !video || !streamRef.current) return;
+
+    video.srcObject = streamRef.current;
+
+    try {
+      await video.play();
+
+      const lector = new BrowserQRCodeReader();
+
+      const controles = await lector.decodeFromVideoElement(
+        video,
+        (resultado) => {
+          if (resultado) {
+  const codigo = resultado.getText();
+  setEstadoEstacion("IDENTIFICANDO");
+
+  setQrLeido(codigo);
+  controlesQRRef.current?.stop();
+
+  fetch("/api/estacion/validar-qr/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    credentials: "include",
+    body: JSON.stringify({
+      codigo_qr: codigo,
+    }),
+  })
+    .then(async (response) => {
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "No se pudo identificar al estudiante.");
+      }
+
+      return data;
+    })
+    .then((data) => {
+  setEstudianteIdentificado(data.estudiante);
+  setEstadoEstacion("DETECTANDO");
+
+  console.log("Estudiante identificado:", data.estudiante);
+})
+    .catch((error) => {
+  console.error("Error al validar QR:", error);
+
+  setEstudianteIdentificado(null);
+  setQrLeido("");
+  setEstadoEstacion("ESPERANDO_QR");
+
+  setReiniciarLectorQR((anterior) => anterior + 1);
+});
+}
+        }
+      );
+
+      if (cancelado) {
+        controles.stop();
+      } else {
+        controlesQRRef.current = controles;
+      }
+    } catch (error) {
+      if (!cancelado) {
+        console.error("Error al leer el QR:", error);
+        setErrorCamara("No se pudo iniciar el lector QR.");
+      }
+    }
+  }
+
+  iniciarLectorQR();
+
+  return () => {
+    cancelado = true;
+    controlesQRRef.current?.stop();
+    controlesQRRef.current = null;
+  };
+}, [cameraActiva, reiniciarLectorQR]);
+
+
+  useEffect(() => {
+  if (!cameraActiva || estadoEstacion !== "DETECTANDO") return;
+
+  let solicitudEnCurso = false;
+
+  async function analizarImagen() {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (!video || !canvas || video.videoWidth === 0 || solicitudEnCurso) {
+      return;
+    }
+
+    solicitudEnCurso = true;
+    setProcesandoDeteccion(true);
+
+    try {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const contexto = canvas.getContext("2d");
+
+      if (!contexto) return;
+
+      contexto.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const imagen = canvas.toDataURL("image/jpeg", 0.7);
+
+      console.log("Enviando imagen a YOLO...");
+      const inicioAnalisis = performance.now();
+      const response = await fetch("/api/detectar-residuo/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ imagen }),
+      });
+
+      const data = await response.json();
+      console.log(
+  "Tiempo de análisis:",
+  Math.round(performance.now() - inicioAnalisis),
+  "ms"
+);
+
+      if (!response.ok) {
+        throw new Error(data.error || "Error al analizar la imagen.");
+      }
+
+      setDetecciones(data.detecciones ?? []);
+      dibujarDetecciones(data.detecciones ?? []);
+      console.log(
+  "Objetos rastreados:",
+  JSON.stringify(data.detecciones, null, 2)
+);
+    } catch (error) {
+      console.error("Error en la detección YOLO:", error);
+
+    } finally {
+      solicitudEnCurso = false;
+      setProcesandoDeteccion(false);
+    }
+  }
+
+  function dibujarDetecciones(detecciones: any[]) {
+  const canvas = overlayRef.current;
+  const video = videoRef.current;
+
+  if (!canvas || !video) return;
+
+  const contexto = canvas.getContext("2d");
+  if (!contexto) return;
+
+  const ancho = video.videoWidth;
+  const alto = video.videoHeight;
+
+  if (!ancho || !alto) return;
+
+  canvas.width = ancho;
+  canvas.height = alto;
+
+  contexto.clearRect(0, 0, ancho, alto);
+
+  detecciones.forEach((deteccion) => {
+    const [x1, y1, x2, y2] = deteccion.coordenadas;
+
+    const anchoCaja = x2 - x1;
+    const altoCaja = y2 - y1;
+
+    const etiqueta = `${deteccion.clase} ${deteccion.confianza}% | ID ${deteccion.track_id}`;
+
+    // Cuadro de detección
+    contexto.strokeStyle = "#00FF66";
+    contexto.lineWidth = 3;
+    contexto.strokeRect(x1, y1, anchoCaja, altoCaja);
+
+    // Fondo de la etiqueta
+    contexto.font = "bold 16px Arial";
+
+    const anchoTexto = contexto.measureText(etiqueta).width + 12;
+    const altoTexto = 26;
+
+    contexto.fillStyle = "#00FF66";
+    contexto.fillRect(
+      x1,
+      Math.max(0, y1 - altoTexto),
+      anchoTexto,
+      altoTexto
+    );
+
+    // Texto
+    contexto.fillStyle = "#000000";
+    contexto.fillText(
+      etiqueta,
+      x1 + 6,
+      Math.max(18, y1 - 8)
+    );
+  });
+}
+
+  const intervalo = window.setInterval(analizarImagen, 200);
+
+  return () => {
+    window.clearInterval(intervalo);
+  };
+}, [cameraActiva, estadoEstacion]);
+
+  async function iniciarCamara() {
+    try {
+      setErrorCamara("");
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+  throw new Error("El navegador no permite acceder a la cámara.");
+}
+
+const stream = await navigator.mediaDevices.getUserMedia({
+  video: {
+    facingMode: { ideal: "environment" },
+    width: { ideal: 640 },
+    height: { ideal: 480 },
+    frameRate: { ideal: 15, max: 20 },
+  },
+  audio: false,
+});
+
+      streamRef.current = stream;
+setCameraActiva(true);
+    } catch (error) {
+  console.error("Error al activar la cámara:", error);
+
+  setErrorCamara(
+    error instanceof Error
+      ? error.message
+      : "No se pudo activar la cámara."
+  );
+}
+  }
+
+  function detenerCamara() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setCameraActiva(false);
+  }
+
+  return (
+    <main className="station-page">
+      <h1>EcoCampus AI</h1>
+      <h2>Estación de reciclaje</h2>
+      <div>
+  <strong>Estado de la estación: </strong>
+
+  {estadoEstacion === "ESPERANDO_QR" && "Esperando código QR..."}
+  {estadoEstacion === "IDENTIFICANDO" && "Identificando estudiante..."}
+  {estadoEstacion === "DETECTANDO" && "Detectando residuos..."}
+  {estadoEstacion === "VERIFICANDO_DEPOSITO" && "Verificando depósito..."}
+  {estadoEstacion === "REGISTRANDO" && "Registrando reciclaje..."}
+  {estadoEstacion === "FINALIZADO" && "Proceso finalizado."}
+</div>
+
+      <p>Selecciona el punto de reciclaje que representa este dispositivo.</p>
+
+      {cargando ? (
+        <p>Cargando puntos de reciclaje...</p>
+      ) : error ? (
+        <p>{error}</p>
+      ) : (
+        <select
+          value={puntoSeleccionado}
+          onChange={(e) => setPuntoSeleccionado(e.target.value)}
+          disabled={cameraActiva}
+        >
+          <option value="">Selecciona un punto</option>
+          {puntos.map((punto) => (
+            <option key={punto.id} value={punto.id}>
+              {punto.nombre} - {punto.ubicacion}
+            </option>
+          ))}
+        </select>
+      )}
+
+      <div>
+        {!cameraActiva ? (
+          <button
+            onClick={iniciarCamara}
+            disabled={!puntoSeleccionado}
+          >
+            Iniciar estación
+          </button>
+        ) : (
+          <button onClick={detenerCamara}>
+            Detener cámara
+          </button>
+        )}
+      </div>
+
+      {errorCamara && <p>{errorCamara}</p>}
+
+      {cameraActiva && (
+        <section>
+          <h3>Cámara de la estación activa</h3>
+          <div
+  style={{
+    position: "relative",
+    width: "100%",
+    maxWidth: "600px",
+    overflow: "hidden",
+  }}
+>
+  <video
+    ref={videoRef}
+    autoPlay
+    playsInline
+    muted
+    style={{
+      width: "100%",
+      display: "block",
+    }}
+  />
+
+  <canvas
+    ref={overlayRef}
+    style={{
+      position: "absolute",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      pointerEvents: "none",
+    }}
+  />
+</div>
+          <canvas
+  ref={canvasRef}
+  style={{ display: "none" }}
+/>
+          {qrLeido && estudianteIdentificado ? (
+  <div>
+    <h3>¡Estudiante identificado!</h3>
+    <p><strong>Nombre:</strong> {estudianteIdentificado.nombre}</p>
+    <p><strong>Facultad:</strong> {estudianteIdentificado.facultad}</p>
+    <p><strong>Carrera:</strong> {estudianteIdentificado.carrera}</p>
+    <p><strong>Estado:</strong> Identificación correcta</p>
+  </div>
+) : qrLeido ? (
+  <p>Verificando estudiante en la base de datos...</p>
+) : (
+  <p>Esperando que un estudiante presente su código QR...</p>
+)}
+          {estudianteIdentificado && (
+  <section>
+    <h3>Detección de residuos con YOLOv8</h3>
+
+    {procesandoDeteccion && (
+      <p>Analizando imagen de la cámara...</p>
+    )}
+
+    {detecciones.length > 0 ? (
+      <div>
+        {detecciones.map((deteccion, index) => (
+          <div key={index}>
+            <strong>{deteccion.clase}</strong>
+            <p>
+              Confianza: {deteccion.confianza.toFixed(2)}%
+            </p>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <p>No se han detectado residuos todavía.</p>
+    )}
+  </section>
+)}
+        </section>
+      )}
+    </main>
+  );
+}
+
+
+
 export default function App() {
   const [role, setRole] = useState<Role | null>(null);
+  const esEstacion = window.location.pathname === "/estacion-reciclaje";
   const [checkingSession, setCheckingSession] = useState(true);
+  const queryClient = useQueryClient();
 
   type UsuarioSesion = {
   id: number;
@@ -6918,21 +7923,31 @@ const [usuario, setUsuario] = useState<UsuarioSesion | null>(null);
       throw new Error("No se pudo cerrar la sesión en Django.");
     }
 
-    setRole(null);
-    setUsuario(null);
+    queryClient.clear();
+setRole(null);
+setUsuario(null);
   } catch (error) {
     console.error("Error al cerrar sesión:", error);
     alert("No se pudo cerrar la sesión. Inténtalo de nuevo.");
   }
 };
 
-  if (checkingSession) {
-    return <div>Cargando EcoCampus AI...</div>;
-  }
+  if (esEstacion) {
+  return <EstacionReciclaje />;
+}
+
+if (checkingSession) {
+  return <div>Cargando EcoCampus AI...</div>;
+}
 
   return role ? (
     <Shell role={role} logout={handleLogout} usuario={usuario} />
   ) : (
-    <Login onLogin={setRole} />
+    <Login
+  onLogin={(nuevoRol, nuevoUsuario) => {
+    setRole(nuevoRol);
+    setUsuario(nuevoUsuario);
+  }}
+/>
   );
 }

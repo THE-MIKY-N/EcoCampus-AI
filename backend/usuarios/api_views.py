@@ -1,5 +1,11 @@
 import json
+import base64
+import cv2
+import numpy as np
 
+
+from django.db.models.deletion import ProtectedError
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework import generics
 from django.db.models import Sum, Count, Q, F
 from django.utils import timezone
@@ -22,6 +28,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import generics, status
 from django.db import transaction
+from .ia_service import detectar_residuos
+from rest_framework.permissions import AllowAny
+
+from rest_framework.decorators import (
+    api_view,
+    permission_classes,
+    authentication_classes,
+)
 
 
 from io import BytesIO
@@ -189,6 +203,16 @@ class PuntosReciclajeAPIView(generics.ListAPIView):
         return PuntoReciclaje.objects.filter(activo=True).order_by("nombre")
 
 
+
+class PuntosReciclajeEstacionAPIView(generics.ListAPIView):
+    serializer_class = PuntoReciclajeSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return PuntoReciclaje.objects.filter(
+            activo=True
+        ).order_by("nombre")
+
 class MisDeteccionesAPIView(generics.ListAPIView):
     serializer_class = DeteccionResiduoSerializer
     permission_classes = [IsAuthenticated]
@@ -292,6 +316,7 @@ class RankingEstudiantesAPIView(generics.ListAPIView):
 
         return perfiles
 
+
 class MisLogrosAPIView(generics.GenericAPIView):
     permission_classes = [IsAuthenticated]
 
@@ -343,11 +368,59 @@ class MisLogrosAPIView(generics.GenericAPIView):
                     "nombre": item.insignia.nombre,
                     "descripcion": item.insignia.descripcion,
                     "fecha_obtencion": item.fecha_obtencion,
+                    "equipada": item.equipada,
                 }
                 for item in insignias
             ],
         })
 
+    def patch(self, request, *args, **kwargs):
+        perfil = get_object_or_404(
+            PerfilEstudiante,
+            usuario=request.user,
+        )
+
+        insignias_ids = request.data.get("insignias_ids", [])
+
+        if not isinstance(insignias_ids, list):
+            return Response(
+                {"error": "Debes enviar una lista de insignias."},
+                status=400,
+            )
+
+        if len(insignias_ids) > 3:
+            return Response(
+                {"error": "Solo puedes equipar un máximo de 3 insignias."},
+                status=400,
+            )
+
+        if len(insignias_ids) != len(set(insignias_ids)):
+            return Response(
+                {"error": "No puedes seleccionar insignias repetidas."},
+                status=400,
+            )
+
+        insignias_validas = InsigniaObtenida.objects.filter(
+            estudiante=perfil,
+            insignia_id__in=insignias_ids,
+        )
+
+        if insignias_validas.count() != len(insignias_ids):
+            return Response(
+                {"error": "Una o más insignias no han sido desbloqueadas."},
+                status=400,
+            )
+
+        InsigniaObtenida.objects.filter(
+            estudiante=perfil
+        ).update(equipada=False)
+
+        insignias_validas.update(equipada=True)
+
+        return Response({
+            "mensaje": "Insignias equipadas correctamente.",
+            "insignias_ids": insignias_ids,
+        })
 
 
 
@@ -1015,24 +1088,117 @@ class AdminFacultadDetalleAPIView(APIView):
     def delete(self, request, pk):
         facultad = self.get_object(pk)
 
-        if facultad.carreras.exists():
-            return Response(
-                {"error": "No se puede eliminar: la facultad tiene carreras asociadas."},
-                status=400,
-            )
+        try:
+            with transaction.atomic():
 
-        if PerfilEstudiante.objects.filter(
-            facultad_relacionada=facultad
-        ).exists():
-            return Response(
-                {"error": "No se puede eliminar: hay estudiantes asociados a esta facultad."},
-                status=400,
-            )
+                # Obtener las carreras pertenecientes a la facultad.
+                carreras_ids = list(
+                    Carrera.objects.filter(
+                        facultad=facultad
+                    ).values_list("id", flat=True)
+                )
 
-        facultad.delete()
+                # Obtener los usuarios vinculados a la facultad
+                # o a cualquiera de sus carreras.
+                estudiantes_ids = list(
+                    PerfilEstudiante.objects.filter(
+                        Q(facultad_relacionada=facultad) |
+                        Q(carrera_relacionada_id__in=carreras_ids)
+                    ).values_list("usuario_id", flat=True)
+                )
+
+                # Eliminar participaciones en retos grupales
+                # de los estudiantes de esta facultad.
+                ParticipacionRetoGrupal.objects.filter(
+                    estudiante_id__in=estudiantes_ids,
+                    reto__modalidad=RetoEcologico.Modalidad.GRUPAL
+                ).delete()
+
+                # Eliminar progresos grupales de la facultad
+                # y de todas sus carreras.
+                ProgresoRetoGrupal.objects.filter(
+                    Q(facultad=facultad) |
+                    Q(carrera_id__in=carreras_ids)
+                ).delete()
+
+                # Desvincular estudiantes sin eliminar sus cuentas.
+                PerfilEstudiante.objects.filter(
+                    Q(facultad_relacionada=facultad) |
+                    Q(carrera_relacionada_id__in=carreras_ids)
+                ).update(
+                    facultad_relacionada=None,
+                    carrera_relacionada=None
+                )
+
+                # Eliminar la facultad y sus carreras.
+                facultad.delete()
+
+            return Response({
+                "detail": "Facultad, carreras y relaciones asociadas eliminadas correctamente."
+            })
+
+        except ProtectedError:
+            return Response({
+                "error": "No se puede eliminar la facultad porque existen otros registros asociados."
+            }, status=400)
+
+
+class AdminPuntosReciclajeAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get(self, request):
+        puntos = PuntoReciclaje.objects.all().order_by("nombre")
+        return Response(PuntoReciclajeSerializer(puntos, many=True).data)
+
+    def post(self, request):
+        serializer = PuntoReciclajeSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=201)
+
+        return Response(serializer.errors, status=400)
+
+
+class AdminPuntoReciclajeDetalleAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get_object(self, pk):
+        return get_object_or_404(PuntoReciclaje, pk=pk)
+
+    def put(self, request, pk):
+        punto = self.get_object(pk)
+        serializer = PuntoReciclajeSerializer(
+            punto,
+            data=request.data
+        )
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+
+        return Response(serializer.errors, status=400)
+
+    def patch(self, request, pk):
+        punto = self.get_object(pk)
+        serializer = PuntoReciclajeSerializer(
+            punto,
+            data=request.data,
+            partial=True
+        )
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+
+        return Response(serializer.errors, status=400)
+
+    def delete(self, request, pk):
+        punto = self.get_object(pk)
+        punto.delete()
 
         return Response({
-            "detail": "Facultad eliminada correctamente."
+            "detail": "Punto de reciclaje eliminado correctamente."
         })
 
 class AdminCarrerasAPIView(APIView):
@@ -1181,17 +1347,45 @@ class AdminCarreraDetalleAPIView(APIView):
     def delete(self, request, pk):
         carrera = self.get_object(pk)
 
-        if PerfilEstudiante.objects.filter(
-            carrera_relacionada=carrera
-        ).exists():
+        try:
+            with transaction.atomic():
+
+                # Obtener los estudiantes de esta carrera.
+                estudiantes_ids = list(
+                    PerfilEstudiante.objects.filter(
+                        carrera_relacionada=carrera
+                    ).values_list("usuario_id", flat=True)
+                )
+
+                # Eliminar sus inscripciones en retos grupales
+                # cuyo progreso se organiza por carrera.
+                ParticipacionRetoGrupal.objects.filter(
+                    estudiante_id__in=estudiantes_ids,
+                    reto__modalidad=RetoEcologico.Modalidad.GRUPAL,
+                    reto__alcance=RetoEcologico.Alcance.CARRERA
+                ).delete()
+
+                # Eliminar únicamente el progreso de esta carrera.
+                ProgresoRetoGrupal.objects.filter(
+                    carrera=carrera
+                ).delete()
+
+                # Eliminar la carrera.
+                # Los perfiles se conservarán gracias a SET_NULL.
+                carrera.delete()
+
+            return Response({
+                "detail": "Carrera eliminada correctamente."
+            })
+
+        except ProtectedError:
             return Response(
-                {"error": "No se puede eliminar: hay estudiantes asociados a esta carrera."},
-                status=400,
+                {
+                    "error": "No se puede eliminar: existen otros registros asociados a esta carrera."
+                },
+                status=400
             )
 
-        carrera.delete()
-
-        return Response({"detail": "Carrera eliminada correctamente."})
 
 class AdminReciclajesAPIView(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
@@ -1394,6 +1588,30 @@ class AdminRetoDetalleAPIView(APIView):
             "detail": "Reto eliminado correctamente."
         })
 
+def desbloquear_insignia_a_estudiantes(insignia):
+    if not insignia.activo:
+        return
+
+    perfiles = PerfilEstudiante.objects.filter(
+        puntos__gte=insignia.puntos_requeridos
+    ).select_related("usuario")
+
+    for perfil in perfiles:
+        obtenida, creada = InsigniaObtenida.objects.get_or_create(
+            estudiante=perfil,
+            insignia=insignia
+        )
+
+        if creada:
+            Notificacion.objects.create(
+                usuario=perfil.usuario,
+                titulo="¡Nueva insignia desbloqueada!",
+                mensaje=(
+                    f"Has obtenido la insignia '{insignia.nombre}'. "
+                    "¡Sigue reciclando en EcoCampus AI!"
+                ),
+                tipo="SUCCESS",
+            )
 
 class AdminInsigniasAPIView(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
@@ -1411,8 +1629,14 @@ class AdminInsigniasAPIView(APIView):
         serializer = AdminInsigniaSerializer(data=request.data)
 
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=201)
+            insignia = serializer.save()
+
+            desbloquear_insignia_a_estudiantes(insignia)
+
+            return Response(
+                AdminInsigniaSerializer(insignia).data,
+                status=201
+            )
 
         return Response(serializer.errors, status=400)
 
@@ -1431,8 +1655,13 @@ class AdminInsigniaDetalleAPIView(APIView):
         )
 
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
+            insignia = serializer.save()
+
+            desbloquear_insignia_a_estudiantes(insignia)
+
+            return Response(
+                AdminInsigniaSerializer(insignia).data
+            )
 
         return Response(serializer.errors, status=400)
 
@@ -1445,8 +1674,13 @@ class AdminInsigniaDetalleAPIView(APIView):
         )
 
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
+            insignia = serializer.save()
+
+            desbloquear_insignia_a_estudiantes(insignia)
+
+            return Response(
+                AdminInsigniaSerializer(insignia).data
+            )
 
         return Response(serializer.errors, status=400)
 
@@ -3012,6 +3246,7 @@ class RecompensasDisponiblesAPIView(APIView):
         return Response(serializer.data)
 
 
+
 class CanjearRecompensaAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -3062,10 +3297,12 @@ class CanjearRecompensaAPIView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            CanjeRecompensa.objects.create(
+            canje = CanjeRecompensa.objects.create(
                 estudiante=request.user,
                 recompensa=recompensa,
-                costo_ecucoins=recompensa.costo_ecucoins
+                costo_ecucoins=recompensa.costo_ecucoins,
+                nombre_recompensa=recompensa.nombre,
+                descripcion_recompensa=recompensa.descripcion
             )
 
             recompensa.cantidad_disponible -= 1
@@ -3073,8 +3310,17 @@ class CanjearRecompensaAPIView(APIView):
 
         return Response({
             "mensaje": "Recompensa canjeada correctamente.",
-            "saldo_restante": saldo - recompensa.costo_ecucoins
+            "saldo_restante": saldo - recompensa.costo_ecucoins,
+            "voucher": {
+                "id": canje.id,
+                "codigo": str(canje.codigo),
+                "nombre": canje.nombre_recompensa,
+                "descripcion": canje.descripcion_recompensa,
+                "costo_ecucoins": canje.costo_ecucoins,
+                "fecha_canje": canje.fecha_canje
+            }
         }, status=status.HTTP_201_CREATED)
+
 
 
 class MisRecompensasAPIView(APIView):
@@ -3090,9 +3336,10 @@ class MisRecompensasAPIView(APIView):
         for canje in canjes:
             resultados.append({
                 "id": canje.id,
+                "codigo": str(canje.codigo),
                 "recompensa_id": canje.recompensa.id,
-                "nombre": canje.recompensa.nombre,
-                "descripcion": canje.recompensa.descripcion,
+                "nombre": canje.nombre_recompensa,
+                "descripcion": canje.descripcion_recompensa,
                 "costo_ecucoins": canje.costo_ecucoins,
                 "fecha_canje": canje.fecha_canje,
                 "estado": canje.estado,
@@ -3138,3 +3385,78 @@ class NivelesReciclajeAPIView(APIView):
         )
 
         return Response(serializer.data)
+
+
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def detectar_residuo(request):
+    imagen_base64 = request.data.get("imagen")
+
+    if not imagen_base64:
+        return Response(
+            {"error": "No se recibió ninguna imagen"},
+            status=400
+        )
+
+    try:
+        if "," in imagen_base64:
+            imagen_base64 = imagen_base64.split(",", 1)[1]
+
+        imagen_bytes = base64.b64decode(imagen_base64)
+
+        matriz = np.frombuffer(imagen_bytes, np.uint8)
+        imagen = cv2.imdecode(matriz, cv2.IMREAD_COLOR)
+
+        if imagen is None:
+            return Response(
+                {"error": "Imagen no válida"},
+                status=400
+            )
+
+        detecciones = detectar_residuos(imagen)
+
+        return Response({
+            "correcto": True,
+            "detecciones": detecciones
+        })
+
+    except Exception as error:
+        return Response(
+            {"error": str(error)},
+            status=500
+        )
+
+
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def validar_qr_estudiante(request):
+    codigo_qr = request.data.get("codigo_qr")
+
+    if not codigo_qr:
+        return Response(
+            {"correcto": False, "error": "No se recibió el código QR"},
+            status=400
+        )
+
+    perfil = PerfilEstudiante.objects.select_related("usuario").filter(
+        codigo_qr=codigo_qr
+    ).first()
+
+    if not perfil:
+        return Response(
+            {"correcto": False, "error": "El estudiante no está registrado"},
+            status=404
+        )
+
+    nombre = perfil.usuario.get_full_name().strip() or perfil.usuario.username
+
+    return Response({
+        "correcto": True,
+        "estudiante": {
+            "nombre": nombre,
+            "facultad": str(perfil.facultad_relacionada) if perfil.facultad_relacionada else "Sin facultad",
+            "carrera": str(perfil.carrera_relacionada) if perfil.carrera_relacionada else "Sin carrera"
+        }
+    })

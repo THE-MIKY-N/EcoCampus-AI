@@ -1,4 +1,5 @@
 from django.urls import path
+from .api_views import detectar_residuo
 
 from .api_views import (
     MiPerfilAPIView,
@@ -36,6 +37,10 @@ from .api_views import (
     CanjearRecompensaAPIView,
     MisRecompensasAPIView,
     NivelesReciclajeAPIView,
+    PuntosReciclajeEstacionAPIView,
+    validar_qr_estudiante,
+    AdminPuntosReciclajeAPIView,
+    AdminPuntoReciclajeDetalleAPIView,
 
 )
 
@@ -179,5 +184,26 @@ urlpatterns = [
         "niveles/",
         NivelesReciclajeAPIView.as_view(),
         name="niveles-reciclaje",
+    ),
+    path("detectar-residuo/", detectar_residuo, name="detectar_residuo"),
+    path(
+        "estacion/puntos-reciclaje/",
+        PuntosReciclajeEstacionAPIView.as_view(),
+        name="estacion-puntos-reciclaje",
+    ),
+    path(
+        "estacion/validar-qr/",
+        validar_qr_estudiante,
+        name="estacion-validar-qr",
+    ),
+    path(
+        "admin/puntos-reciclaje/",
+        AdminPuntosReciclajeAPIView.as_view(),
+        name="admin-puntos-reciclaje",
+    ),
+    path(
+        "admin/puntos-reciclaje/<int:pk>/",
+        AdminPuntoReciclajeDetalleAPIView.as_view(),
+        name="admin-punto-reciclaje-detalle",
     ),
 ]

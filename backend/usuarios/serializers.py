@@ -47,6 +47,7 @@ class PerfilEstudianteSerializer(serializers.ModelSerializer):
             "usuario",
             "correo",
             "identificacion",
+            "codigo_qr",
             "facultad",
             "carrera",
             "semestre",
@@ -85,8 +86,18 @@ class TipoResiduoSerializer(serializers.ModelSerializer):
 class PuntoReciclajeSerializer(serializers.ModelSerializer):
     class Meta:
         model = PuntoReciclaje
-        fields = ["id", "nombre", "ubicacion", "activo"]
-        read_only_fields = fields
+        fields = [
+            "id",
+            "nombre",
+            "ubicacion",
+            "descripcion",
+            "residuos_aceptados",
+            "codigo_qr",
+            "activo",
+            "latitud",
+            "longitud",
+        ]
+        read_only_fields = ["id"]
 
 
 class DeteccionResiduoSerializer(serializers.ModelSerializer):
