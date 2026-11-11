@@ -10,12 +10,11 @@ modelo = YOLO(str(MODEL_PATH))
 
 
 def detectar_residuos(imagen):
-    resultados = modelo.track(
+    resultados = modelo.predict(
         source=imagen,
         conf=0.40,
-        tracker="bytetrack.yaml",
-        persist=True,
-        verbose=False
+        verbose=False,
+        imgsz=416
     )
 
     detecciones = []
@@ -24,13 +23,7 @@ def detectar_residuos(imagen):
         for caja in resultado.boxes:
             clase_id = int(caja.cls[0])
 
-            track_id = None
-
-            if caja.id is not None:
-                track_id = int(caja.id[0])
-
             detecciones.append({
-                "track_id": track_id,
                 "clase": modelo.names[clase_id],
                 "confianza": round(float(caja.conf[0]) * 100, 2),
                 "coordenadas": caja.xyxy[0].tolist()

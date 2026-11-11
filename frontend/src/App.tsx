@@ -7576,16 +7576,29 @@ const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
         body: JSON.stringify({ imagen }),
       });
 
-      const data = await response.json();
-      console.log(
+
+const textoRespuesta = await response.text();
+
+console.log(
   "Tiempo de análisis:",
   Math.round(performance.now() - inicioAnalisis),
   "ms"
 );
 
-      if (!response.ok) {
-        throw new Error(data.error || "Error al analizar la imagen.");
-      }
+let data;
+
+try {
+  data = textoRespuesta ? JSON.parse(textoRespuesta) : {};
+} catch {
+  throw new Error("El servidor devolvió una respuesta no válida.");
+}
+
+if (!response.ok) {
+  throw new Error(
+    data.error || `Error del servidor: ${response.status}`
+  );
+}
+
 
       setDetecciones(data.detecciones ?? []);
       dibujarDetecciones(data.detecciones ?? []);
@@ -7627,7 +7640,7 @@ const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
     const anchoCaja = x2 - x1;
     const altoCaja = y2 - y1;
 
-    const etiqueta = `${deteccion.clase} ${deteccion.confianza}% | ID ${deteccion.track_id}`;
+    const etiqueta = `${deteccion.clase} ${deteccion.confianza}%`;
 
     // Cuadro de detección
     contexto.strokeStyle = "#00FF66";
@@ -7658,7 +7671,7 @@ const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
   });
 }
 
-  const intervalo = window.setInterval(analizarImagen, 200);
+  const intervalo = window.setInterval(analizarImagen, 1500);
 
   return () => {
     window.clearInterval(intervalo);
