@@ -7417,6 +7417,7 @@ function EstacionReciclaje() {
 });
 
 const error = errorConsultaPuntos?.message ?? "";
+const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
   const [errorCamara, setErrorCamara] = useState("");
   const [cameraActiva, setCameraActiva] = useState(false);
 
