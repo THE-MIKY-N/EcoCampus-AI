@@ -4,6 +4,8 @@ from django.contrib.admin.helpers import ActionForm
 from django.core.exceptions import ValidationError
 
 from .models import (
+    Facultad,
+    Carrera,
     PerfilEstudiante,
     TipoResiduo,
     DeteccionResiduo,
@@ -11,7 +13,19 @@ from .models import (
     RegistroReciclaje,
     NivelReciclaje,
     Insignia,
+    InsigniaObtenida,
+    RetoEcologico,
+    ParticipacionReto,
+    ParticipacionRetoGrupal,
+    ProgresoRetoGrupal,
+    Recompensa,
+    CanjeRecompensa,
+    ConfiguracionSistema,
+    Notificacion,
 )
+
+
+
 from .services import validar_reciclaje, rechazar_deteccion
 
 
@@ -63,8 +77,8 @@ class DeteccionResiduoAdmin(admin.ModelAdmin):
         "estado_validacion",
     )
     search_fields = (
-        "estudiante__username",
-        "estudiante__email",
+        "estudiante__usuario__username",
+    "estudiante__usuario__email",
         "tipo_residuo__nombre",
     )
     list_filter = ("estado_validacion", "tipo_residuo")
@@ -172,8 +186,8 @@ class RegistroReciclajeAdmin(admin.ModelAdmin):
         "fecha_registro",
     )
     search_fields = (
-        "estudiante__username",
-        "estudiante__email",
+        "estudiante__usuario__username",
+        "estudiante__usuario__email",
         "tipo_residuo__nombre",
         "punto_reciclaje__nombre",
     )
@@ -204,3 +218,30 @@ class InsigniaAdmin(admin.ModelAdmin):
     list_filter = ("activo",)
     list_editable = ("puntos_requeridos", "activo")
     ordering = ("puntos_requeridos", "nombre")
+
+
+@admin.register(Facultad)
+class FacultadAdmin(admin.ModelAdmin):
+    list_display = ("nombre", "activa")
+    search_fields = ("nombre",)
+    list_filter = ("activa",)
+
+
+@admin.register(Carrera)
+class CarreraAdmin(admin.ModelAdmin):
+    list_display = ("nombre", "facultad", "activa")
+    search_fields = ("nombre", "facultad__nombre")
+    list_filter = ("facultad", "activa")
+
+
+admin.site.register([
+    InsigniaObtenida,
+    RetoEcologico,
+    ParticipacionReto,
+    ParticipacionRetoGrupal,
+    ProgresoRetoGrupal,
+    Recompensa,
+    CanjeRecompensa,
+    ConfiguracionSistema,
+    Notificacion,
+])

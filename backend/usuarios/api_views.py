@@ -84,6 +84,23 @@ from .serializers import (
 )
 
 
+class EstadisticasPublicasAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        estudiantes_activos = PerfilEstudiante.objects.filter(
+            usuario__is_active=True
+        ).count()
+
+        residuos_clasificados = RegistroReciclaje.objects.count()
+
+        return Response({
+            "estudiantes_activos": estudiantes_activos,
+            "residuos_clasificados": residuos_clasificados,
+        })
+
+
+
 @ensure_csrf_cookie
 def obtener_csrf(request):
     return JsonResponse({"detail": "CSRF disponible"})

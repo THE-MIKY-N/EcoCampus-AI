@@ -12,6 +12,7 @@ from .models import (
     PuntoReciclaje,
     RegistroReciclaje,
     Notificacion,
+    Insignia,
     InsigniaObtenida,
     RetoEcologico,
     ParticipacionReto,
@@ -135,8 +136,8 @@ def actualizar_retos_estudiante(registro):
                     perfil = PerfilEstudiante.objects.select_for_update().get(
                         usuario=estudiante
                     )
-                    perfil.puntos += reto.recompensa_puntos
-                    perfil.save(update_fields=["puntos"])
+                    perfil.puntos_recompensas += reto.recompensa_puntos
+                    perfil.save(update_fields=["puntos_recompensas"])
 
                 Notificacion.objects.create(
                     usuario=estudiante,
@@ -152,101 +153,6 @@ def actualizar_retos_estudiante(registro):
                 update_fields=["progreso", "fecha_completado"]
             )
 
-        # -----------------------------------------
-        # RETOS GRUPALES
-        # -----------------------------------------
-        elif reto.modalidad == RetoEcologico.Modalidad.GRUPAL:
-
-            # Si el grupo ya alcanzó la meta, no aceptar
-            # nuevos participantes ni entregar más recompensas.
-            if reto.fecha_completado:
-                continue
-
-            perfil = PerfilEstudiante.objects.select_related(
-                "carrera_relacionada",
-                "facultad_relacionada",
-            ).get(usuario=estudiante)
-
-            if reto.alcance == RetoEcologico.Alcance.CARRERA:
-                if perfil.carrera_relacionada_id != reto.carrera_id:
-                    continue
-
-            elif reto.alcance == RetoEcologico.Alcance.FACULTAD:
-                if perfil.facultad_relacionada_id != reto.facultad_id:
-                    continue
-
-            # Registrar primero al estudiante que contribuyó.
-            ParticipacionRetoGrupal.objects.get_or_create(
-                reto=reto,
-                estudiante=estudiante,
-            )
-
-            registros = RegistroReciclaje.objects.filter(
-                fecha_registro__gte=reto.fecha_inicio,
-                fecha_registro__lte=reto.fecha_fin,
-            )
-
-            if reto.alcance == RetoEcologico.Alcance.CARRERA:
-                registros = registros.filter(
-                    estudiante__perfil__carrera_relacionada_id=reto.carrera_id
-                )
-            else:
-                registros = registros.filter(
-                    estudiante__perfil__facultad_relacionada_id=reto.facultad_id
-                )
-
-            if reto.tipo_objetivo == RetoEcologico.TipoObjetivo.RECICLAJES:
-                valor_actual = registros.count()
-
-            elif reto.tipo_objetivo == RetoEcologico.TipoObjetivo.PUNTOS:
-                valor_actual = registros.aggregate(
-                    total=Sum("puntos_otorgados")
-                )["total"] or 0
-
-            else:
-                valor_actual = registros.filter(
-                    tipo_residuo=reto.tipo_residuo
-                ).aggregate(
-                    total=Sum("cantidad")
-                )["total"] or 0
-
-            # Cuando el grupo alcanza la meta, finalizar una sola vez.
-            if valor_actual >= reto.meta:
-
-                reto.fecha_completado = ahora
-                reto.save(update_fields=["fecha_completado"])
-
-                participantes = list(
-                    ParticipacionRetoGrupal.objects.filter(
-                        reto=reto,
-                        recompensa_entregada=False,
-                    ).select_related("estudiante")
-                )
-
-                for participante in participantes:
-
-                    perfil_participante = (
-                        PerfilEstudiante.objects.select_for_update().get(
-                            usuario=participante.estudiante
-                        )
-                    )
-
-                    if reto.recompensa_puntos > 0:
-                        perfil_participante.puntos += reto.recompensa_puntos
-                        perfil_participante.save(update_fields=["puntos"])
-
-                    participante.recompensa_entregada = True
-                    participante.save(update_fields=["recompensa_entregada"])
-
-                    Notificacion.objects.create(
-                        usuario=participante.estudiante,
-                        titulo="¡Reto grupal completado!",
-                        mensaje=(
-                            f"El grupo ha completado el reto '{reto.titulo}'. "
-                            f"Has recibido {reto.recompensa_puntos} puntos."
-                        ),
-                        tipo="SUCCESS",
-                    )
 
 
 @transaction.atomic
@@ -301,8 +207,8 @@ def validar_reciclaje(deteccion_id, punto_reciclaje_id):
     )
     deteccion.save(update_fields=["estado_validacion"])
 
-    perfil.puntos += puntos
-    perfil.save(update_fields=["puntos"])
+    perfil.puntos_recompensas += reto.recompensa_puntos
+    perfil.save(update_fields=["puntos_recompensas"])
 
     # Actualizar automáticamente los retos del estudiante.
     actualizar_retos_estudiante(registro)

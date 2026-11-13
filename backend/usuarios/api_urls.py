@@ -41,6 +41,7 @@ from .api_views import (
     validar_qr_estudiante,
     AdminPuntosReciclajeAPIView,
     AdminPuntoReciclajeDetalleAPIView,
+    EstadisticasPublicasAPIView,
 
 )
 
@@ -205,5 +206,10 @@ urlpatterns = [
         "admin/puntos-reciclaje/<int:pk>/",
         AdminPuntoReciclajeDetalleAPIView.as_view(),
         name="admin-punto-reciclaje-detalle",
+    ),
+    path(
+        "estadisticas-publicas/",
+        EstadisticasPublicasAPIView.as_view(),
+        name="estadisticas-publicas",
     ),
 ]

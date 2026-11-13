@@ -147,12 +147,12 @@ class RankingEstudianteSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
+    nombre_completo = serializers.SerializerMethodField()
     facultad = serializers.CharField(
         source="facultad_relacionada.nombre",
         read_only=True,
         allow_null=True
     )
-
     carrera = serializers.CharField(
         source="carrera_relacionada.nombre",
         read_only=True,
@@ -161,17 +161,23 @@ class RankingEstudianteSerializer(serializers.ModelSerializer):
 
     posicion = serializers.SerializerMethodField()
     ecucoins = serializers.SerializerMethodField()
+    nivel = serializers.SerializerMethodField()
 
     class Meta:
         model = PerfilEstudiante
         fields = [
             "posicion",
             "usuario",
+            "nombre_completo",
             "facultad",
             "carrera",
             "puntos",
             "ecucoins",
+            "nivel",
         ]
+
+    def get_nombre_completo(self, obj):
+        return obj.usuario.get_full_name().strip() or obj.usuario.username
 
     def get_posicion(self, obj):
         return getattr(obj, "posicion_ranking", 0)
@@ -179,7 +185,21 @@ class RankingEstudianteSerializer(serializers.ModelSerializer):
     def get_ecucoins(self, obj):
         return obj.puntos // 5
 
+    def get_nivel(self, obj):
+        if not hasattr(self, "_niveles_activos"):
+            self._niveles_activos = list(
+                NivelReciclaje.objects.filter(
+                    activo=True
+                ).order_by("puntos_minimos")
+            )
 
+        nivel_actual = None
+
+        for nivel in self._niveles_activos:
+            if obj.puntos >= nivel.puntos_minimos:
+                nivel_actual = nivel
+
+        return nivel_actual.nombre if nivel_actual else "Sin nivel"
 
 class NivelReciclajeSerializer(serializers.ModelSerializer):
     imagen = serializers.SerializerMethodField()

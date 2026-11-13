@@ -11,9 +11,14 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 from pathlib import Path
+import os
+from dotenv import load_dotenv
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Leer las variables de configuración desde la raíz del proyecto.
+ROOT_DIR = BASE_DIR.parent
+load_dotenv(ROOT_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
@@ -118,7 +123,12 @@ from urllib.parse import unquote, urlparse
 
 if os.environ.get("DJANGO_USE_SUPABASE", "").lower() == "true":
 
-    db_url = urlparse(os.environ["SUPABASE_DATABASE_URL"])
+    supabase_url = os.environ.get("SUPABASE_DATABASE_URL")
+
+    if not supabase_url:
+        raise RuntimeError("Falta configurar SUPABASE_DATABASE_URL")
+
+    db_url = urlparse(supabase_url)
 
     DATABASES = {
         "default": {
@@ -139,17 +149,18 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "mssql",
-            "NAME": "EcoCampusAI",
-            "HOST": r"DESKTOP-LQ7RG1G",
-            "PORT": "",
+            "NAME": os.environ.get("DB_NAME", "EcoCampusAI"),
+            "HOST": os.environ.get("DB_HOST", "localhost"),
+            "PORT": os.environ.get("DB_PORT", ""),
             "OPTIONS": {
-                "driver": "ODBC Driver 18 for SQL Server",
+                "driver": os.environ.get(
+                    "DB_DRIVER",
+                    "ODBC Driver 18 for SQL Server"
+                ),
                 "extra_params": "TrustServerCertificate=yes;",
             },
         }
     }
-
-
 
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators

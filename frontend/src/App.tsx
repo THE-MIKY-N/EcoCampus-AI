@@ -170,6 +170,34 @@ function Login({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [estadisticas, setEstadisticas] = useState({
+  estudiantes_activos: 0,
+  residuos_clasificados: 0,
+});
+
+useEffect(() => {
+  const cargarEstadisticas = async () => {
+    try {
+      const response = await fetch("/api/estadisticas-publicas/");
+
+      if (!response.ok) {
+        throw new Error("No se pudieron cargar las estadísticas.");
+      }
+
+      const data = await response.json();
+
+      setEstadisticas({
+        estudiantes_activos: data.estudiantes_activos ?? 0,
+        residuos_clasificados: data.residuos_clasificados ?? 0,
+      });
+    } catch (error) {
+      console.error("Error al cargar estadísticas:", error);
+    }
+  };
+
+  cargarEstadisticas();
+}, []);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
@@ -258,10 +286,21 @@ onLogin(
           <p>Sistema inteligente de gestión e incentivo del reciclaje universitario.</p>
         </div>
         <div className="impact-row">
-          <div><b>12.480</b><span>residuos clasificados</span></div>
-          <div><b>98,4%</b><span>precisión de detección</span></div>
-          <div><b>1.248</b><span>estudiantes activos</span></div>
-        </div>
+  <div>
+    <b>{estadisticas.residuos_clasificados.toLocaleString("es-EC")}</b>
+    <span>residuos clasificados</span>
+  </div>
+
+  <div>
+    <b>98,4%</b>
+    <span>precisión de detección</span>
+  </div>
+
+  <div>
+    <b>{estadisticas.estudiantes_activos.toLocaleString("es-EC")}</b>
+    <span>estudiantes activos</span>
+  </div>
+</div>
       </div>
     </section>
     <section className="login-panel">
@@ -1203,7 +1242,7 @@ function HistoryPage() {
   isLoading: loading,
   error: historyError,
 } = useQuery<string[][]>({
-  queryKey: ["historial"],
+  queryKey: ["historial", "v2"],
   queryFn: async () => {
     const response = await fetch("/api/historial/", {
       credentials: "include",
@@ -1248,11 +1287,12 @@ function HistoryPage() {
           })
         : "—";
 
-      const puntos = obtener(registro, "puntos", "puntos_obtenidos");
-      const ecucoins = obtener(registro, "ecucoins", "ecucoins_obtenidos");
+      const puntos = obtener(registro,"puntos_otorgados", "puntos", "puntos_obtenidos");
+      const ecucoins = Math.floor(Number(puntos || 0) / 5);
 
       const residuo = obtener(
         registro,
+        "tipo_residuo_nombre",
         "residuo_nombre",
         "material",
         "tipo_residuo",
@@ -1270,15 +1310,15 @@ function HistoryPage() {
       const estado = obtener(registro, "estado", "estado_validacion");
 
       return [
-        fecha,
-        hora,
-        String(residuo?.nombre ?? residuo ?? "No disponible"),
-        String(punto?.nombre ?? punto ?? "No disponible"),
-        String(puntos || 0),
-        String(ecoins || 0),
-        String(estado || "Completado"),
-        fechaOriginal ? String(fechaOriginal).slice(0, 10) : "",
-      ];
+  fecha,
+  hora,
+  String(residuo?.nombre ?? residuo ?? "No disponible"),
+  String(punto?.nombre ?? punto ?? "No disponible"),
+  String(estado || "Completado"),
+  String(puntos || 0),
+  String(ecucoins || 0),
+  fechaOriginal ? String(fechaOriginal).slice(0, 10) : "",
+];
     });
 
     return normalizados;
@@ -1310,31 +1350,31 @@ const error = historyError?.message ?? "";
     .replace(/[\u0300-\u036f]/g, "");
 
   const filteredRows = rows.filter((row) => {
+  if (!Array.isArray(row)) return false;
+
   const coincideMaterial =
-  filter === "Todos" ||
-  (FILTER_MATERIAL[filter] ?? []).some((material) =>
-    normalizarTexto(row[2]).includes(normalizarTexto(material))
+    filter === "Todos" ||
+    (FILTER_MATERIAL[filter] ?? []).some((material) =>
+      normalizarTexto(String(row[2] ?? "")).includes(
+        normalizarTexto(material)
+      )
+    );
 
-
-  );
-
-  return coincideMaterial;
-
-
-
-  const fecha = row[7];
+  const fecha = String(row[7] ?? "");
 
   const coincideFechaDesde =
-    !fechaDesde || (fecha && fecha >= fechaDesde);
+    !fechaDesde || (fecha !== "" && fecha >= fechaDesde);
 
   const coincideFechaHasta =
-    !fechaHasta || (fecha && fecha <= fechaHasta);
+    !fechaHasta || (fecha !== "" && fecha <= fechaHasta);
 
   const coincideResultado =
     resultadoFiltro === "Todos" ||
-    row[4].toLowerCase().includes(resultadoFiltro.toLowerCase());
+    String(row[6] ?? "").toLowerCase().includes(
+      resultadoFiltro.toLowerCase()
+    );
 
-  const texto = `${row[2]} ${row[3]} ${row[4]}`.toLowerCase();
+  const texto = `${row[2]} ${row[3]} ${row[6]}`.toLowerCase();
 
   const coincideBusqueda = texto.includes(busqueda.toLowerCase());
 
@@ -1346,8 +1386,6 @@ const error = historyError?.message ?? "";
     coincideBusqueda
   );
 });
-
-
 
   const totalPaginas = Math.max(
     1,
@@ -1611,7 +1649,16 @@ const error = historyError?.message ?? "";
 
 type RankingType = "Estudiantes" | "Carreras" | "Facultades";
 type RankingPeriod = "Todo el tiempo" | "Este mes" | "Esta semana";
-type StudentRank = { name: string; faculty: string; career: string; points: number; level: number; isUser?: boolean; position?: number;};
+type StudentRank = {
+  name: string;
+  username: string;
+  faculty: string;
+  career: string;
+  points: number;
+  level: string;
+  isUser?: boolean;
+  position?: number;
+};
 function calcularNivel(puntos: number): number {
   return Math.floor(puntos / 300) + 1;
 }
@@ -1725,9 +1772,15 @@ function StudentRankingTable({
             </td>
             <td>
               <div className="person-cell">
-                <div className="avatar small">
-                  {entry.name.split(" ").map((s) => s[0]).join("").toUpperCase()}
-                </div>
+                <div className="avatar small" aria-hidden="true">
+  {entry.name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0])
+    .join("")
+    .toUpperCase()}
+</div>
                 <b>{entry.name}</b>
                 {entry.isUser && <Badge>Tú</Badge>}
               </div>
@@ -1735,7 +1788,7 @@ function StudentRankingTable({
             <td>{entry.faculty}</td>
             <td>{entry.career}</td>
             <td>{formatPoints(entry.points, period)}</td>
-            <td><Badge tone="blue">Nivel {entry.level}</Badge></td>
+            <td><Badge tone="blue">{entry.level}</Badge></td>
           </tr>
         ))}
       </tbody>
@@ -1875,25 +1928,30 @@ function RankingPage() {
   const estudiantes: StudentRank[] = registros.map(
     (
       registro: {
-        posicion?: number;
-        usuario?: string;
-        facultad?: string;
-        carrera?: string;
-        puntos?: number;
-      },
+  posicion?: number;
+  usuario?: string;
+  nombre_completo?: string;
+  facultad?: string;
+  carrera?: string;
+  puntos?: number;
+  nivel?: string;
+},
       index: number
     ) => {
-      const name = registro.usuario ?? "Estudiante";
-      const isUser =
-        name.toLowerCase() === usuarioActual.toLowerCase();
+      const username = registro.usuario ?? "";
+const name = registro.nombre_completo ?? username ?? "Estudiante";
+
+const isUser =
+  username.toLowerCase() === usuarioActual.toLowerCase();
 
       return {
         position: registro.posicion ?? index + 1,
         name,
+        username,
         faculty: registro.facultad ?? "No disponible",
         career: registro.carrera ?? "No disponible",
         points: Number(registro.puntos ?? 0),
-        level: 0,
+        level: registro.nivel ?? "Principiante",
         isUser,
       };
     }
