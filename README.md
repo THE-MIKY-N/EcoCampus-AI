@@ -6,8 +6,8 @@ Su propósito es facilitar el registro de residuos reciclados, reconocer la part
 
 Acceso a la plataforma
 
-Página web principal: https://ecocampus-ai.netlify.app
-Estación de reciclaje: https://ecocampus-ai.netlify.app/estacion-reciclaje
+- Página web principal: https://ecocampus-ai.netlify.app
+- Estación de reciclaje: https://ecocampus-ai.netlify.app/estacion-reciclaje
 
 
 ¿Cómo funciona EcoCampus AI?
