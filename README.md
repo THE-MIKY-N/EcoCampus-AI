@@ -76,18 +76,18 @@ Entre sus funcionalidades se encuentran:
 
 Tecnologías utilizadas
 
-Área          Tecnologías 
+- Área         - Tecnologías 
 
-Frontend: React, TypeScript, Vite y Tailwind CSS 
-Backend: Python, Django y Django REST Framework 
-Base de datos: PostgreSQL mediante Supabase 
-Visión artificial: YOLO, OpenCV y ONNX Runtime 
-Procesamiento de modelos: PyTorch y Ultralytics 
-Lectura de códigos QR: ZXing 
-Despliegue frontend: Netlify 
-Despliegue backend: Render 
-Control de versiones: Git y GitHub 
-Diseño de interfaz: Figma 
+- Frontend: React, TypeScript, Vite y Tailwind CSS 
+- Backend: Python, Django y Django REST Framework 
+- Base de datos: PostgreSQL mediante Supabase 
+- Visión artificial: YOLO, OpenCV y ONNX Runtime 
+- Procesamiento de modelos: PyTorch y Ultralytics 
+- Lectura de códigos QR: ZXing 
+- Despliegue frontend: Netlify 
+- Despliegue backend: Render 
+- Control de versiones: Git y GitHub 
+- Diseño de interfaz: Figma 
 
 Credenciales de acceso
 
@@ -95,13 +95,13 @@ Los siguientes espacios están destinados a incorporar las credenciales de las c
 
 Cuenta Administrador
 
-Correo: gmosqueram2@unemi.edu.ec
-Contraseña: 1234
+- Correo: gmosqueram2@unemi.edu.ec
+- Contraseña: 1234
 
 Cuenta Estudiante
 
-Correo: apenafiel4@unemi.edu.ec
-Contraseña: usuario_1
+- Correo: apenafiel4@unemi.edu.ec
+- Contraseña: usuario_1
 
 Objetivo del proyecto
 
