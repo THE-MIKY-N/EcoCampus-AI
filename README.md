@@ -109,3 +109,6 @@ EcoCampus AI busca integrar tecnología e innovación en la gestión del recicla
 
 Mediante la inteligencia artificial, la automatización y los incentivos digitales, el sistema contribuye a construir una comunidad universitaria más consciente, participativa y sostenible.
 
+El archivo de tests donde se ejecutaron diferentes pruebas para verificar el funcionamiento correcto del proyecto, se encuentra en la siguiente ruta:
+-backend/usuarios/tests.py
+
