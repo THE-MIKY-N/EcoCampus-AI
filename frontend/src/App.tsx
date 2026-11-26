@@ -49,10 +49,12 @@ type IconName =
   | "gift"
   | "info"
   | "coin"
+  | "building"
   | "lock";
 
 type PerfilEstudiante = {
   usuario: string;
+  nombre_completo: string;
   correo: string;
   identificacion: string;
   codigo_qr: string;
@@ -90,6 +92,7 @@ const paths: Record<IconName, ReactNode> = {
   download: <><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></>,
   filter: <path d="M3 5h18l-7 8v6l-4 2v-8z"/>,
   check: <path d="m5 12 4 4L19 6"/>,
+  building: <><path d="M3 21h18"/><path d="M5 21V5l7-3 7 3v16"/><path d="M9 8h1M14 8h1M9 12h1M14 12h1M9 16h1M14 16h1"/></>,
   close: <path d="m6 6 12 12M18 6 6 18"/>,
   eye: <><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></>,
   "arrow-left": <><path d="m15 18-6-6 6-6"/><path d="M9 12h10"/></>,
@@ -989,7 +992,7 @@ console.log("Mi posición:", miRanking?.posicion);
 
   return <>
     <PageHeader
-      title={`Hola, ${perfil?.usuario ?? "estudiante"}`}
+      title={`Hola, ${perfil?.nombre_completo?.trim().split(/\s+/).slice(0, 2).join(" ") ?? "estudiante"}`}
       subtitle="Tu impacto está creciendo. Esto es lo que has logrado hasta hoy."
       action={
         <Button icon="qr" onClick={() => setShowQR(true)}>
@@ -3550,19 +3553,23 @@ const miPosicion =
 
 
  return <><PageHeader title="Mi perfil" subtitle="Consulta tu información institucional y tu impacto personal." action={<div className="flex flex-wrap items-center gap-2"><Button variant="secondary" className="profile-edit" onClick={()=>{setDraftDescription(description);setEditing(true);setNotice("")}}>Editar perfil</Button><Button variant="secondary" className="profile-edit" onClick={()=>setEditingBadges(true)}>Editar insignias</Button></div>}/><div className="profile-layout"><section className="card profile-main"><div className="profile-cover"/><div className="profile-identity"><div className="avatar xl">
-  {perfil?.usuario
-    ? perfil.usuario
-        .trim()
-        .split(/\s+/)
-        .slice(0, 2)
-        .map(parte => parte[0])
-        .join("")
-        .toUpperCase()
-    : "..."}
-</div><div><h2>{cargandoPerfil ? "Cargando..." : perfil?.usuario ?? "Estudiante"}</h2><p>Estudiante · Cuenta verificada</p></div></div>
+  {perfil?.nombre_completo
+  ? perfil.nombre_completo
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map(parte => parte[0])
+      .join("")
+      .toUpperCase()
+  : "..."}
+</div><div><h2>
+  {cargandoPerfil
+    ? "Cargando..."
+    : perfil?.nombre_completo ?? "Estudiante"}
+</h2><p>Estudiante · Cuenta verificada</p></div></div>
 
 <div className="profile-fields">
-  {field("Nombre completo", perfil?.usuario ?? "Cargando...")}
+  {field("Nombre completo", perfil?.nombre_completo ?? "Cargando...")}
   {field("Identificación", perfil?.identificacion ?? "Cargando...")}
   {field("Correo institucional", perfil?.correo ?? "Cargando...")}
   {field("Rol", "Estudiante")}
@@ -6498,6 +6505,109 @@ const {
   },
 });
 
+const {
+  data: recompensas = [],
+} = useQuery<AdminEntity[], Error>({
+  queryKey: ["admin", "rewards"],
+  queryFn: async () => {
+    const respuesta = await fetch("/api/admin/recompensas/", {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!respuesta.ok) {
+      throw new Error("No se pudieron cargar las recompensas.");
+    }
+
+    const datos = await respuesta.json();
+
+    return datos.map((item: any): AdminEntity => ({
+      id: String(item.id),
+      name: item.nombre,
+      description: item.descripcion || "",
+      active: item.activa,
+      cost: item.costo_ecucoins,
+      stock: item.cantidad_disponible,
+      redeemed: item.canjes_realizados,
+      imageUrl: item.imagen || "",
+    }));
+  },
+});
+
+
+const { data: retos = [] } = useQuery<AdminEntity[], Error>({
+  queryKey: ["admin", "challenges"],
+  queryFn: async () => {
+    const respuesta = await fetch("/api/admin/retos/", {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!respuesta.ok) {
+      throw new Error("No se pudieron cargar los retos.");
+    }
+
+    const datos = await respuesta.json();
+
+    return datos.map((item: any): AdminEntity => ({
+      id: String(item.id),
+      name: item.titulo,
+      description: item.descripcion || "",
+      objective: item.descripcion || "",
+      active: item.activo,
+      modality: item.modalidad || "INDIVIDUAL",
+      scope: item.alcance || undefined,
+      careerId: item.carrera ? Number(item.carrera) : undefined,
+      facultyId: item.facultad ? Number(item.facultad) : undefined,
+      goalType: item.tipo_objetivo || "RECICLAJES",
+      goal: item.meta ?? 1,
+      wasteTypeId: item.tipo_residuo
+        ? Number(item.tipo_residuo)
+        : undefined,
+      reward: item.recompensa_puntos ?? 0,
+      startDate: toLocalDateTime(item.fecha_inicio),
+      endDate: toLocalDateTime(item.fecha_fin),
+      participants: item.participantes ?? 0,
+      completed: item.completados ?? 0,
+    }));
+  },
+});
+
+const { data: insignias = [] } = useQuery<AdminEntity[], Error>({
+  queryKey: ["admin", "badges"],
+  queryFn: async () => {
+    const respuesta = await fetch("/api/admin/insignias/", {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!respuesta.ok) {
+      throw new Error("No se pudieron cargar las insignias.");
+    }
+
+    const datos = await respuesta.json();
+
+    return datos.map((item: any): AdminEntity => ({
+      id: String(item.id),
+      name: item.nombre,
+      description: item.descripcion || "",
+      active: item.activo,
+      condition: `Alcanzar ${item.puntos_requeridos} puntos`,
+      obtained: item.obtenidas,
+      imageUrl: item.imagen || "",
+    }));
+  },
+});
+
 const errorDashboard = errorConsultaDashboard?.message ?? "";
 
 
@@ -6533,17 +6643,53 @@ if (errorDashboard) {
   );
 }
 
- return <><PageHeader title="Panel de Gestión Ambiental" subtitle="Resumen conectado de EcoCampus AI" action={<Button variant="secondary" icon="download" onClick={()=>setNotice("Exportación simulada del resumen.")}>Exportar resumen</Button>}/><AdminNotice text={notice}/><div className="admin-stats"><StatCard
-  icon="users"
-  label="Usuarios registrados"
-  value={String(dashboard?.usuarios_registrados ?? 0)}
-  note={`${dashboard?.usuarios_activos ?? 0} activos`}
-/><StatCard
-  icon="history"
-  label="Total de reciclajes"
-  value={String(dashboard?.total_reciclajes ?? 0)}
-  note="Registros almacenados en la base de datos"
-/><StatCard icon="star" label="Puntos generados" value={total.toLocaleString("es-ES")}/><StatCard icon="leaf" label="Facultades / carreras" value={`${store.faculties.length} / ${store.careers.length}`}/><StatCard icon="target" label="Retos activos" value={String(store.challenges.filter(x=>x.active).length)}/><StatCard icon="gift" label="Recompensas activas" value={String(store.rewards.filter(x=>x.active).length)}/><StatCard icon="award" label="Insignias" value={String(store.badges.length)}/></div><div className="admin-charts"><section className="card panel"><div className="panel-title"><div><h3>Participación por facultad</h3><p>Puntos acumulados desde los usuarios</p></div></div>{(dashboard?.facultades ?? []).map((f) => {
+ return <><PageHeader title="Panel de Gestión Ambiental" subtitle="Resumen conectado de EcoCampus AI" action={<Button variant="secondary" icon="download" onClick={()=>setNotice("Exportación simulada del resumen.")}>Exportar resumen</Button>}/><AdminNotice text={notice}/>
+   <div className="admin-stats">
+  <StatCard
+    icon="users"
+    label="Usuarios registrados"
+    value={String(dashboard?.usuarios_registrados ?? 0)}
+    note={`${dashboard?.usuarios_activos ?? 0} activos`}
+  />
+
+  <StatCard
+    icon="history"
+    label="Total de reciclajes"
+    value={String(dashboard?.total_reciclajes ?? 0)}
+    note="Registros almacenados en la base de datos"
+  />
+
+  <StatCard
+    icon="target"
+    label="Puntos generados"
+    value={total.toLocaleString("es-ES")}
+    note="Puntos acumulados por los estudiantes"
+  />
+
+  <StatCard
+    icon="leaf"
+    label="Facultades / carreras"
+    value={`${store.faculties.length} / ${store.careers.length}`}
+  />
+  <StatCard
+    icon="gift"
+    label="Recompensas activas"
+    value={String(recompensas.filter(x => x.active).length)}
+  />
+
+  <StatCard
+  icon="target"
+  label="Retos activos"
+  value={String(retos.filter(x => x.active).length)}
+/>
+
+  <StatCard
+  icon="award"
+  label="Insignias"
+  value={String(insignias.length)}
+/>
+</div>
+   <div className="admin-charts"><section className="card panel"><div className="panel-title"><div><h3>Participación por facultad</h3><p>Puntos acumulados desde los usuarios</p></div></div>{(dashboard?.facultades ?? []).map((f) => {
   const maxPuntos = Math.max(
     ...(dashboard?.facultades ?? []).map((fac) => fac.puntos),
     1
@@ -7483,6 +7629,7 @@ const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
   const streamRef = useRef<MediaStream | null>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [qrLeido, setQrLeido] = useState("");
+  const [sessionId, setSessionId] = useState("");
   const [estudianteIdentificado, setEstudianteIdentificado] = useState<{
   nombre: string;
   facultad: string;
@@ -7542,8 +7689,9 @@ const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
     },
     credentials: "include",
     body: JSON.stringify({
-      codigo_qr: codigo,
-    }),
+  codigo_qr: codigo,
+  punto_reciclaje_id: puntoSeleccionado,
+}),
   })
     .then(async (response) => {
       const data = await response.json();
@@ -7555,6 +7703,7 @@ const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
       return data;
     })
     .then((data) => {
+  setSessionId(data.session_id);
   setEstudianteIdentificado(data.estudiante);
   setEstadoEstacion("DETECTANDO");
 
@@ -7565,6 +7714,7 @@ const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
 
   setEstudianteIdentificado(null);
   setQrLeido("");
+  setSessionId("");
   setEstadoEstacion("ESPERANDO_QR");
 
   setReiniciarLectorQR((anterior) => anterior + 1);
@@ -7601,77 +7751,197 @@ const [puntoSeleccionado, setPuntoSeleccionado] = useState("");
 
   let solicitudEnCurso = false;
 
-  async function analizarImagen() {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
 
-    if (!video || !canvas || video.videoWidth === 0 || solicitudEnCurso) {
+  async function analizarImagen() {
+  const video = videoRef.current;
+  const canvas = canvasRef.current;
+
+  if (
+    !video ||
+    !canvas ||
+    video.videoWidth === 0 ||
+    solicitudEnCurso
+  ) {
+    return;
+  }
+
+  solicitudEnCurso = true;
+  setProcesandoDeteccion(true);
+
+  try {
+    // ==========================================
+    // 1. CAPTURA DEL FOTOGRAMA
+    // ==========================================
+
+    const inicioTotal = performance.now();
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const inicioCaptura = performance.now();
+
+    const contexto = canvas.getContext("2d");
+
+    if (!contexto) return;
+
+    contexto.drawImage(
+      video,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+
+    const finCaptura = performance.now();
+
+    // ==========================================
+    // 2. CODIFICACIÓN JPEG
+    // ==========================================
+
+    const inicioCodificacion = performance.now();
+
+    const imagen = canvas.toDataURL("image/jpeg", 0.7);
+
+    const finCodificacion = performance.now();
+
+    // ==========================================
+    // 3. ENVÍO AL BACKEND
+    // ==========================================
+
+    console.log("Enviando imagen a YOLO...");
+
+    const inicioEnvio = performance.now();
+
+    const response = await fetch("/api/detectar-residuo/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        imagen,
+        session_id: sessionId,
+      }),
+    });
+
+    const finRespuesta = performance.now();
+
+    // ==========================================
+    // 4. LECTURA DE RESPUESTA
+    // ==========================================
+
+    const textoRespuesta = await response.text();
+
+    const finLectura = performance.now();
+
+    // ==========================================
+    // 5. DIAGNÓSTICO DE RENDIMIENTO
+    // ==========================================
+
+    console.log(
+      "[FRONTEND] Captura:",
+      (finCaptura - inicioCaptura).toFixed(2),
+      "ms"
+    );
+
+    console.log(
+      "[FRONTEND] Codificación JPEG:",
+      (finCodificacion - inicioCodificacion).toFixed(2),
+      "ms"
+    );
+
+    console.log(
+      "[FRONTEND] Espera HTTP:",
+      (finRespuesta - inicioEnvio).toFixed(2),
+      "ms"
+    );
+
+    console.log(
+      "[FRONTEND] Lectura respuesta:",
+      (finLectura - finRespuesta).toFixed(2),
+      "ms"
+    );
+
+    console.log(
+      "[FRONTEND] Tiempo total:",
+      (finLectura - inicioTotal).toFixed(2),
+      "ms"
+    );
+
+    // ==========================================
+    // 6. PROCESAMIENTO DEL JSON
+    // ==========================================
+
+    let data;
+
+    try {
+      data = textoRespuesta ? JSON.parse(textoRespuesta) : {};
+    } catch {
+      throw new Error(
+        "El servidor devolvió una respuesta no válida."
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error || `Error del servidor: ${response.status}`
+      );
+    }
+
+    // ==========================================
+    // 7. FINALIZACIÓN DE SESIÓN
+    // ==========================================
+
+    if (data.sesion_finalizada === true) {
+      console.log(
+        "Sesión finalizada. Esperando nuevo QR."
+      );
+
+      // Detener el ciclo de procesamiento.
+      cancelado = true;
+
+      // Limpiar los datos de la sesión anterior.
+      setSessionId("");
+      setEstudianteIdentificado(null);
+      setQrLeido("");
+      setDetecciones([]);
+
+      // Volver al estado inicial.
+      setEstadoEstacion("ESPERANDO_QR");
+
+      // Reiniciar el lector QR.
+      setReiniciarLectorQR(
+        (anterior) => anterior + 1
+      );
+
       return;
     }
 
-    solicitudEnCurso = true;
-    setProcesandoDeteccion(true);
+    // ==========================================
+    // 8. ACTUALIZAR DETECCIONES
+    // ==========================================
 
-    try {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+    setDetecciones(data.detecciones ?? []);
 
-      const contexto = canvas.getContext("2d");
+    dibujarDetecciones(data.detecciones ?? []);
 
-      if (!contexto) return;
+    console.log(
+      "Objetos rastreados:",
+      JSON.stringify(data.detecciones, null, 2)
+    );
 
-      contexto.drawImage(video, 0, 0, canvas.width, canvas.height);
+  } catch (error) {
+    console.error(
+      "Error en la detección YOLO:",
+      error
+    );
 
-      const imagen = canvas.toDataURL("image/jpeg", 0.7);
-
-      console.log("Enviando imagen a YOLO...");
-      const inicioAnalisis = performance.now();
-      const response = await fetch("/api/detectar-residuo/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ imagen }),
-      });
-
-
-const textoRespuesta = await response.text();
-
-console.log(
-  "Tiempo de análisis:",
-  Math.round(performance.now() - inicioAnalisis),
-  "ms"
-);
-
-let data;
-
-try {
-  data = textoRespuesta ? JSON.parse(textoRespuesta) : {};
-} catch {
-  throw new Error("El servidor devolvió una respuesta no válida.");
-}
-
-if (!response.ok) {
-  throw new Error(
-    data.error || `Error del servidor: ${response.status}`
-  );
-}
-
-
-      setDetecciones(data.detecciones ?? []);
-      dibujarDetecciones(data.detecciones ?? []);
-      console.log(
-  "Objetos rastreados:",
-  JSON.stringify(data.detecciones, null, 2)
-);
-    } catch (error) {
-      console.error("Error en la detección YOLO:", error);
-
-    } finally {
-      solicitudEnCurso = false;
-      setProcesandoDeteccion(false);
-    }
+  } finally {
+    solicitudEnCurso = false;
+    setProcesandoDeteccion(false);
   }
+}
+
+
 
   function dibujarDetecciones(detecciones: any[]) {
   const canvas = overlayRef.current;
@@ -7691,6 +7961,32 @@ if (!response.ok) {
   canvas.height = alto;
 
   contexto.clearRect(0, 0, ancho, alto);
+  // Dibujar línea virtual de confirmación
+const lineaY = canvas.height * 0.80;
+const inicioX = canvas.width * 0.20;
+const finalX = canvas.width * 0.80;
+
+contexto.save();
+
+contexto.beginPath();
+contexto.setLineDash([12, 6]);
+contexto.moveTo(inicioX, lineaY);
+contexto.lineTo(finalX, lineaY);
+
+contexto.strokeStyle = "#00E676";
+contexto.lineWidth = 4;
+contexto.stroke();
+
+contexto.setLineDash([]);
+contexto.fillStyle = "#00E676";
+contexto.font = "bold 15px Arial";
+contexto.fillText(
+  "LINEA DE DEPOSITO",
+  inicioX,
+  lineaY - 12
+);
+
+contexto.restore();
 
   detecciones.forEach((deteccion) => {
     const [x1, y1, x2, y2] = deteccion.coordenadas;
@@ -7698,10 +7994,11 @@ if (!response.ok) {
     const anchoCaja = x2 - x1;
     const altoCaja = y2 - y1;
 
-    const etiqueta = `${deteccion.clase} ${deteccion.confianza}%`;
+    const etiqueta = `ID ${deteccion.track_id} | ${deteccion.clase} ${deteccion.confianza}%`;
 
     // Cuadro de detección
-    contexto.strokeStyle = "#00FF66";
+    contexto.strokeStyle =
+  deteccion.deposito_confirmado ? "#00E676" : "#FFD740";
     contexto.lineWidth = 3;
     contexto.strokeRect(x1, y1, anchoCaja, altoCaja);
 
@@ -7711,7 +8008,8 @@ if (!response.ok) {
     const anchoTexto = contexto.measureText(etiqueta).width + 12;
     const altoTexto = 26;
 
-    contexto.fillStyle = "#00FF66";
+    contexto.fillStyle =
+  deteccion.deposito_confirmado ? "#00E676" : "#FFD740";
     contexto.fillRect(
       x1,
       Math.max(0, y1 - altoTexto),
@@ -7729,12 +8027,26 @@ if (!response.ok) {
   });
 }
 
-  const intervalo = window.setInterval(analizarImagen, 1500);
+  let cancelado = false;
+let temporizador: number;
 
-  return () => {
-    window.clearInterval(intervalo);
-  };
-}, [cameraActiva, estadoEstacion]);
+async function iniciarCiclo() {
+  if (cancelado) return;
+
+  await analizarImagen();
+
+  if (!cancelado) {
+    temporizador = window.setTimeout(iniciarCiclo, 100);
+  }
+}
+
+iniciarCiclo();
+
+return () => {
+  cancelado = true;
+  window.clearTimeout(temporizador);
+};
+}, [cameraActiva, estadoEstacion, sessionId]);
 
   async function iniciarCamara() {
     try {

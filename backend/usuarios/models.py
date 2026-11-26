@@ -208,6 +208,14 @@ class RegistroReciclaje(models.Model):
         default=1
     )
 
+    clave_deposito = models.CharField(
+        max_length=100,
+        unique=True,
+        null=True,
+        blank=True,
+        editable=False
+    )
+
     puntos_otorgados = models.PositiveIntegerField(default=0)
     fecha_registro = models.DateTimeField(auto_now_add=True)
 

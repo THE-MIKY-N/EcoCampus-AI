@@ -5,17 +5,18 @@ from ultralytics import YOLO
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-MODEL_PATH = BASE_DIR / "modelos_ia" / "yolov8n_ecocampus_v1.onnx"
+MODEL_PATH = BASE_DIR / "modelos_ia" / "YOLO_V2" / "best.pt"
 
 modelo = YOLO(str(MODEL_PATH))
+print("[YOLO] Clases cargadas:", modelo.names)
 
 
 def detectar_residuos(imagen):
     resultados = modelo.predict(
         source=imagen,
-        conf=0.40,
+        conf=0.25,
         verbose=False,
-        imgsz=320,
+        imgsz=640,
         device="cpu",
         max_det=10
     )

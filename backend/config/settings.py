@@ -141,6 +141,8 @@ if os.environ.get("DJANGO_USE_SUPABASE", "").lower() == "true":
             "OPTIONS": {
                 "sslmode": "require",
             },
+            "CONN_MAX_AGE": 0,
+            "DISABLE_SERVER_SIDE_CURSORS": True,
         }
     }
 

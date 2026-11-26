@@ -2,7 +2,8 @@ import json
 import base64
 import cv2
 import numpy as np
-
+import traceback
+import time as tiempo_rendimiento
 
 from django.db.models.deletion import ProtectedError
 from rest_framework.decorators import api_view, permission_classes
@@ -29,6 +30,17 @@ from rest_framework.views import APIView
 from rest_framework import generics, status
 from django.db import transaction
 from .ia_service import detectar_residuos
+from django.db import connection
+from decimal import Decimal, InvalidOperation
+from django.db import IntegrityError
+from .tracking_service import (
+    crear_sesion,
+    procesar_frame,
+    obtener_datos_sesion,
+    confirmar_deposito_registrado,
+    obtener_estado_sesion,
+    cerrar_sesion,
+)
 from rest_framework.permissions import AllowAny
 
 from rest_framework.decorators import (
@@ -83,6 +95,21 @@ from .serializers import (
     AdminRetoSerializer,
 )
 
+MAPEO_RESIDUOS = {
+    "plastic": "Plastico",
+    "metal": "Lata",
+    "papeles_cartones": "Papel",
+    "Glass": "Vidrio",
+    "organico": "Organico",
+}
+
+PUNTOS_RESIDUOS = {
+    "Plastico": 3,
+    "Lata": 4,
+    "Papel": 2,
+    "Vidrio": 6,
+    "Organico": 5,
+}
 
 class EstadisticasPublicasAPIView(APIView):
     permission_classes = [AllowAny]
@@ -3404,11 +3431,103 @@ class NivelesReciclajeAPIView(APIView):
         return Response(serializer.data)
 
 
+
+def registrar_deposito_confirmado(session_id, objeto):
+    inicio_total = tiempo_rendimiento.perf_counter()
+
+    datos_sesion = obtener_datos_sesion(session_id)
+
+    if not datos_sesion:
+        raise ValueError(
+            "La sesión de reciclaje no existe o ha expirado"
+        )
+
+    estudiante_id = datos_sesion["estudiante_id"]
+    punto_id = datos_sesion["punto_reciclaje_id"]
+
+    track_id = objeto.get("track_id")
+    clase = objeto.get("clase")
+    confianza = objeto.get("confianza")
+
+    if track_id is None or clase not in MAPEO_RESIDUOS:
+        raise ValueError("Datos del depósito no válidos")
+
+    try:
+        track_id = int(track_id)
+        confianza_decimal = Decimal(str(confianza))
+    except (TypeError, ValueError, InvalidOperation):
+        raise ValueError("Datos del depósito no válidos")
+
+    if not Decimal("0") <= confianza_decimal <= Decimal("1"):
+        raise ValueError(
+            "La confianza de la detección no es válida"
+        )
+
+    confianza_decimal = confianza_decimal.quantize(
+        Decimal("0.0001")
+    )
+
+    tipo_nombre = MAPEO_RESIDUOS[clase]
+    puntos = PUNTOS_RESIDUOS[tipo_nombre]
+
+    clave_deposito = f"{session_id}:{track_id}"
+
+    inicio_sql = tiempo_rendimiento.perf_counter()
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT public.registrar_deposito_ecocampus(
+                %s, %s, %s, %s, %s, %s, %s
+            )
+            """,
+            [
+                estudiante_id,
+                punto_id,
+                track_id,
+                tipo_nombre,
+                puntos,
+                confianza_decimal,
+                clave_deposito,
+            ]
+        )
+
+        fila = cursor.fetchone()
+
+    if not fila:
+        raise RuntimeError(
+            "PostgreSQL no devolvió el resultado del depósito"
+        )
+
+    resultado = fila[0]
+
+    if isinstance(resultado, str):
+        resultado = json.loads(resultado)
+
+    if not isinstance(resultado, dict):
+        raise RuntimeError(
+            "La respuesta de PostgreSQL no es válida"
+        )
+
+    print(
+        f"[REGISTRO] Función PostgreSQL: "
+        f"{(tiempo_rendimiento.perf_counter() - inicio_sql) * 1000:.2f} ms"
+    )
+
+    print(
+        f"[REGISTRO] Tiempo total de función: "
+        f"{(tiempo_rendimiento.perf_counter() - inicio_total) * 1000:.2f} ms"
+    )
+
+    return resultado
+
+
 @api_view(["POST"])
 @authentication_classes([])
 @permission_classes([AllowAny])
 def detectar_residuo(request):
     imagen_base64 = request.data.get("imagen")
+    session_id = request.data.get("session_id")
 
     if not imagen_base64:
         return Response(
@@ -3416,12 +3535,16 @@ def detectar_residuo(request):
             status=400
         )
 
+    inicio_total = tiempo_rendimiento.perf_counter()
+
     try:
+        # -----------------------------------------
+        # 1. DECODIFICACIÓN DE LA IMAGEN
+        # -----------------------------------------
         if "," in imagen_base64:
             imagen_base64 = imagen_base64.split(",", 1)[1]
 
         imagen_bytes = base64.b64decode(imagen_base64)
-
         matriz = np.frombuffer(imagen_bytes, np.uint8)
         imagen = cv2.imdecode(matriz, cv2.IMREAD_COLOR)
 
@@ -3431,49 +3554,152 @@ def detectar_residuo(request):
                 status=400
             )
 
-        detecciones = detectar_residuos(imagen)
+        print(
+            f"[RENDIMIENTO] Decodificación: "
+            f"{(tiempo_rendimiento.perf_counter() - inicio_total) * 1000:.2f} ms"
+        )
+
+        # -----------------------------------------
+        # 2. PROCESAMIENTO YOLO + BOt-SORT
+        # -----------------------------------------
+        inicio_procesamiento = tiempo_rendimiento.perf_counter()
+
+        if session_id:
+            detecciones = procesar_frame(session_id, imagen)
+        else:
+            detecciones = detectar_residuos(imagen)
+
+        print(
+            f"[RENDIMIENTO] YOLO + BoT-SORT: "
+            f"{(tiempo_rendimiento.perf_counter() - inicio_procesamiento) * 1000:.2f} ms"
+        )
+
+        # -----------------------------------------
+        # 3. REGISTRO DE DEPÓSITOS CONFIRMADOS
+        # -----------------------------------------
+        inicio_registros = tiempo_rendimiento.perf_counter()
+
+        registros = []
+
+        if session_id:
+            for objeto in detecciones:
+                if objeto.get("deposito_confirmado") is True:
+
+                    registro = registrar_deposito_confirmado(
+                        session_id,
+                        objeto
+                    )
+
+                    registros.append(registro)
+
+                    # Confirmar al tracker únicamente después
+                    # de completar el registro en PostgreSQL.
+                    confirmar_deposito_registrado(
+                        session_id,
+                        objeto["track_id"]
+                    )
+
+        print(
+            f"[RENDIMIENTO] Registro en PostgreSQL: "
+            f"{(tiempo_rendimiento.perf_counter() - inicio_registros) * 1000:.2f} ms"
+        )
+
+        # -----------------------------------------
+        # 4. COMPROBACIÓN DEL ESTADO DE LA SESIÓN
+        # -----------------------------------------
+        sesion_finalizada = False
+
+        if session_id:
+            sesion_finalizada = obtener_estado_sesion(session_id)
+
+            if sesion_finalizada:
+                cerrar_sesion(session_id)
+
+        # -----------------------------------------
+        # 5. TIEMPO TOTAL DE LA API
+        # -----------------------------------------
+        print(
+            f"[RENDIMIENTO] Tiempo total de API: "
+            f"{(tiempo_rendimiento.perf_counter() - inicio_total) * 1000:.2f} ms"
+        )
 
         return Response({
             "correcto": True,
-            "detecciones": detecciones
+            "detecciones": detecciones,
+            "registros": registros,
+            "sesion_finalizada": sesion_finalizada,
         })
 
-    except Exception as error:
+    except ValueError as error:
         return Response(
             {"error": str(error)},
+            status=400
+        )
+
+    except Exception:
+        print("[ERROR DETECCIÓN]")
+        traceback.print_exc()
+
+        return Response(
+            {"error": "Ocurrió un error al procesar el reciclaje"},
             status=500
         )
+
 
 
 @api_view(["POST"])
 @authentication_classes([])
 @permission_classes([AllowAny])
+
 def validar_qr_estudiante(request):
     codigo_qr = request.data.get("codigo_qr")
+    punto_id = request.data.get("punto_reciclaje_id")
 
-    if not codigo_qr:
-        return Response(
-            {"correcto": False, "error": "No se recibió el código QR"},
-            status=400
-        )
+    if not codigo_qr or not punto_id:
+        return Response({
+            "correcto": False,
+            "error": "Se requiere el QR del estudiante y el punto de reciclaje"
+        }, status=400)
 
-    perfil = PerfilEstudiante.objects.select_related("usuario").filter(
-        codigo_qr=codigo_qr
-    ).first()
+    perfil = PerfilEstudiante.objects.select_related(
+        "usuario"
+    ).filter(codigo_qr=codigo_qr).first()
 
     if not perfil:
-        return Response(
-            {"correcto": False, "error": "El estudiante no está registrado"},
-            status=404
-        )
+        return Response({
+            "correcto": False,
+            "error": "El estudiante no está registrado"
+        }, status=404)
 
-    nombre = perfil.usuario.get_full_name().strip() or perfil.usuario.username
+    punto = PuntoReciclaje.objects.filter(
+        id=punto_id,
+        activo=True
+    ).first()
+
+    if not punto:
+        return Response({
+            "correcto": False,
+            "error": "El punto de reciclaje no existe o está inactivo"
+        }, status=404)
+
+    nombre = (
+        perfil.usuario.get_full_name().strip()
+        or perfil.usuario.username
+    )
+
+    session_id = crear_sesion(
+        perfil.usuario_id,
+        punto.id
+    )
 
     return Response({
         "correcto": True,
+        "session_id": session_id,
         "estudiante": {
             "nombre": nombre,
-            "facultad": str(perfil.facultad_relacionada) if perfil.facultad_relacionada else "Sin facultad",
-            "carrera": str(perfil.carrera_relacionada) if perfil.carrera_relacionada else "Sin carrera"
+            "facultad": str(perfil.facultad_relacionada)
+            if perfil.facultad_relacionada else "Sin facultad",
+            "carrera": str(perfil.carrera_relacionada)
+            if perfil.carrera_relacionada else "Sin carrera"
         }
     })

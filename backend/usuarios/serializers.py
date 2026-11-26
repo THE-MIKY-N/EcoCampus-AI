@@ -24,6 +24,8 @@ class PerfilEstudianteSerializer(serializers.ModelSerializer):
         read_only=True
     )
 
+    nombre_completo = serializers.SerializerMethodField()
+
     correo = serializers.EmailField(
         source="usuario.email",
         read_only=True
@@ -45,6 +47,7 @@ class PerfilEstudianteSerializer(serializers.ModelSerializer):
         model = PerfilEstudiante
         fields = [
             "usuario",
+            "nombre_completo",
             "correo",
             "identificacion",
             "codigo_qr",
@@ -75,6 +78,9 @@ class PerfilEstudianteSerializer(serializers.ModelSerializer):
 
         return acumulados - gastados
 
+    def get_nombre_completo(self, obj):
+        nombre = obj.usuario.get_full_name().strip()
+        return nombre or obj.usuario.username
 
 class TipoResiduoSerializer(serializers.ModelSerializer):
     class Meta:

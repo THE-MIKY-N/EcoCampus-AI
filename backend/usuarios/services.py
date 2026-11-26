@@ -207,8 +207,7 @@ def validar_reciclaje(deteccion_id, punto_reciclaje_id):
     )
     deteccion.save(update_fields=["estado_validacion"])
 
-    perfil.puntos_recompensas += reto.recompensa_puntos
-    perfil.save(update_fields=["puntos_recompensas"])
+
 
     # Actualizar automáticamente los retos del estudiante.
     actualizar_retos_estudiante(registro)
