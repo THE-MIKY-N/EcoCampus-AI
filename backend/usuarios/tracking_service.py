@@ -342,6 +342,8 @@ def procesar_frame(session_id, imagen):
         alto, ancho = imagen.shape[:2]
 
         # Una sola inferencia YOLO por fotograma.
+        inicio_yolo = time.perf_counter()
+
         with _lock_modelo:
             resultado = modelo.predict(
                 source=imagen,
@@ -352,11 +354,23 @@ def procesar_frame(session_id, imagen):
                 max_det=10,
             )[0]
 
+        print(
+            f"[RENDIMIENTO] Inferencia YOLO: "
+            f"{(time.perf_counter() - inicio_yolo) * 1000:.2f} ms"
+        )
+
         cajas = resultado.boxes.cpu().numpy()
+
+        inicio_tracker = time.perf_counter()
 
         tracks = sesion["tracker"].update(
             cajas,
             img=imagen,
+        )
+
+        print(
+            f"[RENDIMIENTO] BoT-SORT: "
+            f"{(time.perf_counter() - inicio_tracker) * 1000:.2f} ms"
         )
 
         print(
