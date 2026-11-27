@@ -1,4 +1,4 @@
-
+import time
 from pathlib import Path
 
 from ultralytics import YOLO
@@ -13,7 +13,10 @@ print("[YOLO] Modelo ONNX cargado.")
 print("[YOLO] Clases:", modelo.names)
 
 
+
 def detectar_residuos(imagen):
+    inicio_yolo = time.perf_counter()
+
     resultados = modelo.predict(
         source=imagen,
         conf=0.25,
@@ -21,6 +24,11 @@ def detectar_residuos(imagen):
         imgsz=480,
         device="cpu",
         max_det=10
+    )
+
+    print(
+        f"[RENDIMIENTO] Inferencia YOLO: "
+        f"{(time.perf_counter() - inicio_yolo) * 1000:.2f} ms"
     )
 
     detecciones = []
@@ -36,3 +44,5 @@ def detectar_residuos(imagen):
             })
 
     return detecciones
+
+
