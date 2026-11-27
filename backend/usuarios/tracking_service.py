@@ -349,7 +349,7 @@ def procesar_frame(session_id, imagen):
                 source=imagen,
                 conf=0.25,
                 verbose=False,
-                imgsz=480,
+                imgsz=320,
                 device="cpu",
                 max_det=10,
             )[0]
